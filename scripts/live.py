@@ -29,7 +29,7 @@ from procta.temporal import make_policy  # noqa: E402
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--camera", type=int, default=0)
-    ap.add_argument("--mode", choices=["baseline", "improved"], default="improved")
+    ap.add_argument("--mode", choices=["frame", "baseline", "improved"], default="improved")
     ap.add_argument("--record", action="store_true")
     ap.add_argument("--imgsz", type=int, default=416)
     ap.add_argument("--det-skip", type=int, default=2)
@@ -78,9 +78,10 @@ def main():
                 wr.writerow([a.track_id, a.event_type, f"{a.t_alert:.2f}", f"{a.t_start:.2f}",
                              a.confidence, a.positive_ratio, ev_file.name])
                 log.flush()
-                conf = "" if a.confidence != a.confidence else f" conf {a.confidence:.2f}"
-                recent.append((t + 4, f"ALERT track {a.track_id}: {a.event_type}{conf}"))
-                print(f"[{t:7.1f}s] ALERT track {a.track_id} {a.event_type}{conf}")
+                conf = "" if a.confidence != a.confidence else f" (confidence {a.confidence:.2f})"
+                msg = a.message(datetime.now().strftime("%H:%M:%S"))
+                recent.append((t + 4, f"track {a.track_id}: {msg}{conf}"))
+                print(f"[{t:7.1f}s] track {a.track_id}: {msg}{conf}")
             recent = [r for r in recent if r[0] > t]
             img = annotate(frame, dets, signals, [r[1] for r in recent])
             cv2.putText(img, f"FPS {fps:.1f}  t={t:.0f}s  mode={args.mode}", (10, img.shape[0] - 10),

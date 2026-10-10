@@ -1,10 +1,18 @@
 # PROCTA – Week 2 progress: baseline, first results, improvement
 
-**Research questions**
+**Main research question (agreed with supervisor)**
+*Can temporal and contextual analysis improve the reliable detection of predefined exam-room events compared with simple frame-level detection?*
+
+Compared systems: **B0 frame-level** (event seen in a frame → alert), **B1 3-s persistence** (first working version, rule from meeting 2), **PROCTA improved** (temporal + contextual, below).
+
+Sub-questions from the project description:
 - **RQ1** Which predefined exam-room events can be detected with high enough precision/recall to support invigilators without excessive false alarms?
 - **RQ2** Does evidence-rich, confidence-aware alerting reduce human review effort while preserving human judgement?
 
-## 1. Baseline (implemented)
+## 1. Baselines (implemented)
+**B0 frame-level** (`FrameLevelAlerter`): same per-frame signals, an alert every time a signal switches on, no time threshold — the "phone detected → alert" baseline expected to give many false alarms.
+
+**B1 3-s persistence** (the live webcam version):
 Webcam pipeline: YOLOv8n (phone, COCO class 67) + YOLOv8n-pose (people, ByteTrack ids, 17 keypoints).
 Per-frame rules → 4 events: `phone_in_hand` (phone centre within 1.5× phone diagonal of a wrist),
 `phone_on_desk` (phone present, not near a wrist), `body_movement` (shoulder-centre speed > 150 px/s),
@@ -28,20 +36,24 @@ Known ground truth, 20 × 10-min sessions per point, 12 fps, bursty detector mis
 
 | per-frame miss rate | policy | precision | recall | false alarms/min | latency (s) | alerts/true episode |
 |---|---|---|---|---|---|---|
-| 0.10 | baseline | 0.95 | 0.94 | 0.12 | 5.05 | **2.62** |
+| 0.10 | B0 frame | 0.82 | 1.00 | **1.41** | 0.20 | **6.64** |
+| 0.20 | B0 frame | 0.88 | 1.00 | **1.58** | 0.09 | **12.22** |
+| 0.10 | B1 persistence | 0.95 | 0.94 | 0.12 | 5.05 | **2.62** |
 | 0.10 | improved | 0.92 | 0.98 | 0.12 | 3.12 | **1.27** |
-| 0.20 | baseline | 0.95 | **0.77** | 0.07 | 7.96 | 1.90 |
+| 0.20 | B1 persistence | 0.95 | **0.77** | 0.07 | 7.96 | 1.90 |
 | 0.20 | improved | 0.95 | **0.99** | 0.07 | 3.37 | 1.38 |
-| 0.30 | baseline | 0.80 | **0.42** | 0.14 | 13.34 | 1.35 |
+| 0.30 | B1 persistence | 0.80 | **0.42** | 0.14 | 13.34 | 1.35 |
 | 0.30 | improved | 0.91 | **0.97** | 0.15 | 4.67 | 1.51 |
 
 (Full table and gap-tolerance ablation: `results/simulation/summary.md`, plot `sweep.png`.)
-Baseline alerts/episode falls at high miss rates only because it detects almost nothing.
+Reading: B0 finds every episode but raises ~12× more false alarms (every < 3 s glance alerts) and 6–12 alerts per real episode → huge review load. B1 cuts false alarms but loses recall as soon as the detector flickers. The improved policy keeps B1's false-alarm rate with B0-like recall and ~1.3 alerts per episode.
+Note: alert-level precision rewards duplicates (B0's duplicates inside true episodes count as "true"), so alerts/episode and false alarms/min are the fairer comparison. B1 alerts/episode falls at high miss rates only because it detects almost nothing.
 
 ### 2c. Real staged-video benchmark – **to fill after recording**
-| session | policy | precision | recall | false alarms/min | latency | alerts/episode |
+| session | policy | precision | recall / missed-event rate | false alarms/min | alerts per exam | alerts/episode |
 |---|---|---|---|---|---|---|
-| s01 | baseline | | | | | |
+| s01 | B0 frame | | | | | |
+| s01 | B1 persistence | | | | | |
 | s01 | improved | | | | | |
 
 ## 3. Baseline limitations
@@ -58,9 +70,10 @@ Baseline alerts/episode falls at high miss rates only because it detects almost 
 - **Confidence score** per alert = mean detector confidence × positive ratio → alerts can be ranked/thresholded.
 - **Phone owner assignment**: each phone belongs to the nearest person only; far-away phones ignored.
 - **Keypoint-confidence gating** for wrists/shoulders.
+- **Wording**: every alert is a review prompt, e.g. "Potential mobile-phone interaction detected at 10:43:21 – please review." — never a verdict.
 - **Evidence**: side-by-side image (episode start | alert moment) with boxes, plus a review page where the invigilator must Confirm/Dismiss each alert; decisions and **seconds per decision** are exported → direct measure of review effort for RQ2.
 
-**Status: implemented** (`ConfidenceAwareAlerter`, `assign_phone_owners`, `scripts/run_offline.py`, `procta/review.py`), unit-tested (7 tests), validated in simulation; evaluation on real staged video is the next step.
+**Status: implemented** (`ConfidenceAwareAlerter`, `assign_phone_owners`, `scripts/run_offline.py`, `procta/review.py`), unit-tested (9 tests), validated in simulation; evaluation on real staged video is the next step.
 
 ## 5. On the simulator
 PROCTA's core is perception on video; the robot (Unitree) only matters for optional patrol between fixed observation points.
@@ -69,6 +82,7 @@ Proposal: a Webots or Isaac Sim scene (exam room + robot at predefined observati
 
 ## 6. Next steps
 1. Record 2–3 staged sessions (different lighting/angle) with `record_session.py`; correct labels with `label_video.py`.
-2. Run baseline vs improved on them → fill table 2c; per-event precision/recall answers RQ1.
-3. Small review study: same alert set reviewed with baseline list vs improved (ranked, with evidence) → review time and decision accuracy (RQ2).
-4. Fine-tune the phone detector on own frames if phone recall is the bottleneck.
+2. Run B0 vs B1 vs improved on them → fill table 2c (precision, recall, missed-event rate, false-alarm rate, alerts per exam); per-event precision/recall answers RQ1.
+3. Human review time (metric from the supervisor's list) via the review page: same alert set reviewed with baseline list vs improved (ranked, with evidence) → review time and decision accuracy (RQ2).
+4. Evidence clips (a few seconds of video) in addition to the evidence images.
+5. Fine-tune the phone detector on own frames if phone recall is the bottleneck.

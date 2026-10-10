@@ -1,6 +1,8 @@
 """Temporal alerting policies: per-frame signals -> discrete, reviewable alerts.
 
-BaselinePersistence  - the rule from procta_live_baseline.py: alert once a signal
+FrameLevelAlerter    - B0, simple frame-level baseline: alert as soon as a signal is on.
+
+BaselinePersistence  - B1, the rule from procta_live_baseline.py: alert once a signal
                        has been on for persistence_s *without a single off frame*.
                        One missed detection resets the timer, and after the episode
                        "ends" the next on-frame starts a fresh one -> a single long
@@ -32,6 +34,14 @@ class Alert:
 
     def to_row(self):
         return asdict(self)
+
+    def message(self, clock: str = None) -> str:
+        """Review prompt wording - never a verdict about the student."""
+        what = {"phone_in_hand": "mobile-phone interaction", "phone_on_desk": "mobile phone on desk",
+                "body_movement": "sustained body movement",
+                "unusual_seat_movement": "unusual seat/desk movement"}.get(self.event_type, self.event_type)
+        when = clock or f"{self.t_alert:.1f}s"
+        return f"Potential {what} detected at {when} - please review."
 
 
 class BaselinePersistence:
@@ -104,14 +114,33 @@ class ConfidenceAwareAlerter:
         return alerts
 
 
+class FrameLevelAlerter:
+    """Supervisor's simple baseline ("phone detected -> alert"): no time threshold.
+    Fires whenever a signal switches on, i.e. one alert per contiguous run of
+    positive frames, so every flicker of the detector becomes a new alert."""
+
+    def __init__(self, cfg: Config):
+        self.on = set()
+
+    def step(self, t: float, signals: dict, present_tracks: set = None):
+        alerts = [Alert(k[0], k[1], t, t, c, 1.0) for k, c in signals.items() if k not in self.on]
+        self.on = set(signals)
+        return alerts
+
+
+MODES = ("frame", "baseline", "improved")   # B0 frame-level, B1 3-s persistence, proposed
+
+
 def make_policy(mode: str, cfg: Config):
-    return BaselinePersistence(cfg) if mode == "baseline" else ConfidenceAwareAlerter(cfg)
+    return {"frame": FrameLevelAlerter, "baseline": BaselinePersistence,
+            "improved": ConfidenceAwareAlerter}[mode](cfg)
 
 
 def run_policy(frames, mode: str, cfg: Config):
     """Replay cached detections through signals + temporal policy -> list[Alert]."""
     from .signals import SignalExtractor
-    sig, pol = SignalExtractor(cfg, mode), make_policy(mode, cfg)
+    sig = SignalExtractor(cfg, "improved" if mode == "improved" else "baseline")
+    pol = make_policy(mode, cfg)
     alerts = []
     for fr in frames:
         s = sig(fr)

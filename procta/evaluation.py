@@ -14,6 +14,8 @@ student per camera):
 Metrics:
   precision        = true alerts / all alerts
   recall           = detected target episodes / target episodes
+  missed-event rate= 1 - recall
+  alerts per exam  = "alerts" column (total alerts the invigilator must review)
   false alarms/min = false alerts / session minutes
   latency          = first true alert time - episode start   (>= persistence_s by design)
   alerts/episode   = true alerts / detected episodes  (1.0 ideal; >1 = duplicate
@@ -69,6 +71,7 @@ def evaluate(alerts, gt, duration_s, persistence_s=3.0, tolerance_s=1.0, event_t
             "target_episodes": len(targets), "detected": detected,
             "precision": n_true / n_alerts if n_alerts else float("nan"),
             "recall": detected / len(targets) if targets else float("nan"),
+            "missed_event_rate": 1 - detected / len(targets) if targets else float("nan"),
             "false_alarms_per_min": n_false / (duration_s / 60.0),
             "mean_latency_s": st.mean(lat) if lat else float("nan"),
             "alerts_per_episode": n_true / detected if detected else float("nan"),
@@ -79,6 +82,7 @@ def evaluate(alerts, gt, duration_s, persistence_s=3.0, tolerance_s=1.0, event_t
         **{k: int(v) for k, v in tot.items()},
         "precision": tot["true_alerts"] / tot["alerts"] if tot["alerts"] else float("nan"),
         "recall": tot["detected"] / tot["target_episodes"] if tot["target_episodes"] else float("nan"),
+        "missed_event_rate": (1 - tot["detected"] / tot["target_episodes"]) if tot["target_episodes"] else float("nan"),
         "false_alarms_per_min": tot["false_alerts"] / (duration_s / 60.0),
         "mean_latency_s": st.mean(all_lat) if all_lat else float("nan"),
         "alerts_per_episode": tot["true_alerts"] / tot["detected"] if tot["detected"] else float("nan"),
@@ -86,7 +90,7 @@ def evaluate(alerts, gt, duration_s, persistence_s=3.0, tolerance_s=1.0, event_t
     return per
 
 
-COLS = ["alerts", "target_episodes", "detected", "precision", "recall",
+COLS = ["alerts", "target_episodes", "detected", "precision", "recall", "missed_event_rate",
         "false_alarms_per_min", "mean_latency_s", "alerts_per_episode"]
 
 

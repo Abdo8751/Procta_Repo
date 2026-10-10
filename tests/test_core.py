@@ -82,3 +82,16 @@ def test_evaluation_counts():
     assert m["recall"] == 1.0 and abs(m["precision"] - 2 / 3) < 1e-9
     assert m["alerts_per_episode"] == 2.0 and m["false_alarms_per_min"] == 1.0
     assert m["mean_latency_s"] == 3.0
+
+
+def test_frame_level_alerts_on_every_flicker():
+    from procta.temporal import FrameLevelAlerter
+    pat = [1, 1, 0, 1, 1, 0, 1] + [0] * 5 + [1]        # 3 runs then a glance -> 4 alerts
+    assert len(feed(FrameLevelAlerter(Config()), pat)) == 4
+
+
+def test_alert_message_is_not_a_verdict():
+    from procta.temporal import Alert
+    m = Alert(7, "phone_in_hand", 12.0, 9.0).message("10:43:21")
+    assert m == "Potential mobile-phone interaction detected at 10:43:21 - please review."
+    assert "cheat" not in m.lower()

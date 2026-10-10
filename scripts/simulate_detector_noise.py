@@ -28,7 +28,7 @@ sys.path.insert(0, str(ROOT))
 
 from procta.config import Config  # noqa: E402
 from procta.evaluation import evaluate  # noqa: E402
-from procta.temporal import BaselinePersistence, ConfidenceAwareAlerter  # noqa: E402
+from procta.temporal import BaselinePersistence, ConfidenceAwareAlerter, FrameLevelAlerter  # noqa: E402
 
 FPS = 12.0
 DUR = 600.0
@@ -87,7 +87,8 @@ def main(seeds=20):
             rng = random.Random(seed * 1000 + int(miss * 100))
             gt = make_session(rng)
             frames = observe(rng, gt, miss)
-            for name, pol in (("baseline", BaselinePersistence(cfg)), ("improved", ConfidenceAwareAlerter(cfg))):
+            for name, pol in (("frame", FrameLevelAlerter(cfg)), ("baseline", BaselinePersistence(cfg)),
+                              ("improved", ConfidenceAwareAlerter(cfg))):
                 m = evaluate(run(pol, frames), gt, DUR, cfg.persistence_s, 1.0, [EV])[EV]
                 rows.append({"miss_rate": miss, "seed": seed, "policy": name, **m})
 
@@ -102,7 +103,7 @@ def main(seeds=20):
 
     summary = []
     for miss in sorted({r["miss_rate"] for r in rows}):
-        for pol in ("baseline", "improved"):
+        for pol in ("frame", "baseline", "improved"):
             sel = [r for r in rows if r["miss_rate"] == miss and r["policy"] == pol]
             summary.append({"miss_rate": miss, "policy": pol,
                             **{k: round(mean([r[k] for r in sel]), 3) for k in
@@ -143,11 +144,11 @@ def main(seeds=20):
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
         fig, axes = plt.subplots(1, 3, figsize=(13, 3.8))
-        colors = {"baseline": "#8a8f98", "improved": "#1f6feb"}
+        colors = {"frame": "#d4a017", "baseline": "#8a8f98", "improved": "#1f6feb"}
         for ax, key, title in zip(axes, ("recall", "alerts_per_episode", "false_alarms_per_min"),
                                   ("Recall (episodes detected)", "Alerts per true episode (review load)",
                                    "False alarms per minute")):
-            for pol in ("baseline", "improved"):
+            for pol in ("frame", "baseline", "improved"):
                 xs = [s["miss_rate"] for s in summary if s["policy"] == pol]
                 ys = [s[key] for s in summary if s["policy"] == pol]
                 ax.plot(xs, ys, marker="o", color=colors[pol], label=pol, linewidth=2)
@@ -156,10 +157,10 @@ def main(seeds=20):
             ax.grid(alpha=0.25)
             ax.spines[["top", "right"]].set_visible(False)
         axes[0].set_ylim(0, 1.05)
-        axes[1].set_ylim(0.9, None)
-        axes[2].set_ylim(0, 0.3)
+        axes[1].set_yscale("log")
+        axes[2].set_yscale("log")
         axes[0].legend(frameon=False)
-        fig.suptitle("Simulated phone-detector flicker: baseline persistence vs confidence-aware alerting "
+        fig.suptitle("Simulated phone-detector flicker: frame-level vs 3-s persistence vs temporal/contextual alerting "
                      f"({seeds} sessions x 10 min per point)", fontsize=11)
         fig.tight_layout()
         fig.savefig(out / "sweep.png", dpi=150)

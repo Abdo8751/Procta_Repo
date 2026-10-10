@@ -1,4 +1,5 @@
-"""Replay cached detections through the BASELINE and the IMPROVED alerting policy,
+"""Replay cached detections through the FRAME-LEVEL baseline (B0), the 3-s PERSISTENCE
+baseline (B1) and the IMPROVED temporal/contextual policy,
 evaluate both against ground truth, and build evidence + a review page.
 
 Usage:
@@ -6,7 +7,7 @@ Usage:
       --gt data/labels/s01_gt.csv --video data/videos/s01.mp4
 
 Outputs in results/<session>/:
-  alerts_baseline.csv, alerts_improved.csv
+  alerts_frame.csv, alerts_baseline.csv, alerts_improved.csv
   metrics.md, metrics.json             (if --gt given)
   evidence/*.jpg + review_improved.html, review_baseline.html   (if --video given)
 """
@@ -24,7 +25,7 @@ sys.path.insert(0, str(ROOT))
 from procta.config import Config, EVENT_TYPES  # noqa: E402
 from procta.detect import load_detections  # noqa: E402
 from procta.evaluation import evaluate, load_gt, to_markdown  # noqa: E402
-from procta.temporal import run_policy  # noqa: E402
+from procta.temporal import MODES, run_policy  # noqa: E402
 
 FIELDS = ["track_id", "event_type", "t_alert", "t_start", "confidence", "positive_ratio"]
 
@@ -92,7 +93,7 @@ def main():
 
     report = [f"# Session `{session}`  ({duration / 60:.1f} min, {len(frames)} frames)\n"]
     all_metrics = {}
-    for mode in ("baseline", "improved"):
+    for mode in MODES:
         alerts = run_policy(frames, mode, cfg)
         write_alerts(out / f"alerts_{mode}.csv", alerts)
         print(f"{mode:9s}: {len(alerts)} alerts")

@@ -11,7 +11,7 @@ Events: `phone_in_hand`, `phone_on_desk`, `body_movement`, `unusual_seat_movemen
 ```bash
 python -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-python -m pytest -q                                     # 7 tests
+python -m pytest -q                                     # 9 tests
 ```
 YOLOv8 weights download automatically on first run (or put them in `models/`).
 
@@ -26,12 +26,12 @@ python scripts/label_video.py --video data/videos/s01_daylight.mp4
 # 3. Run the detectors once, cache detections
 python scripts/extract_detections.py --video data/videos/s01_daylight.mp4
 
-# 4. Baseline vs improved: alerts, metrics, evidence images, review pages
+# 4. Frame-level (B0) vs 3-s persistence (B1) vs improved: alerts, metrics, evidence, review pages
 python scripts/run_offline.py --detections data/detections/s01_daylight.jsonl \
     --gt data/labels/s01_daylight_gt.csv --video data/videos/s01_daylight.mp4
 #    -> results/s01_daylight/metrics.md, review_improved.html
 
-# Live demo (baseline mode reproduces the original script)
+# Live demo: --mode frame | baseline (= original script) | improved
 python scripts/live.py --mode improved
 ```
 Other: `scripts/simulate_detector_noise.py` (controlled detector-flicker experiment),
@@ -49,9 +49,13 @@ legacy/       (optional) drop the original procta_live_baseline.py here for hist
 ```
 
 ## Metrics (event level)
-precision = true alerts / alerts · recall = detected episodes / episodes ≥ 3 s ·
+Research question: can temporal and contextual analysis improve reliable detection of predefined
+exam-room events compared with simple frame-level detection?
+
+precision = true alerts / alerts · recall = detected episodes / episodes ≥ 3 s · missed-event rate = 1 − recall ·
+alerts per exam ·
 false alarms per minute · latency = first alert − episode start ·
-alerts per episode (duplicate alerts = extra review effort).
+alerts per episode (duplicate alerts = extra review effort) · human review time (review page export).
 
 ## Privacy
 Staged mock exams only, with written consent and ethics approval; never a real exam.

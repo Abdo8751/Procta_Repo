@@ -15,7 +15,7 @@ def write_review_page(path, alerts, evidence_files, title, sort_by_confidence=Tr
     for i, (a, img) in enumerate(zip(alerts, evidence_files)):
         items.append({"id": i, "track": a.track_id, "event": a.event_type, "t": round(a.t_alert, 1),
                       "start": round(a.t_start, 1), "conf": None if a.confidence != a.confidence else a.confidence,
-                      "img": img})
+                      "img": img, "msg": a.message()})
     if sort_by_confidence:
         items.sort(key=lambda x: -(x["conf"] or 0))
     data = json.dumps(items)
@@ -42,7 +42,7 @@ function render(){{
  for(const it of items){{
   const d=decisions[it.id]; const c=document.createElement('div'); c.className='card'+(d?' done':'');
   c.innerHTML=`<img src="${{it.img}}" loading="lazy" alt="evidence">
-   <div class="meta"><span><b>${{it.event}}</b></span><span>track ${{it.track}}</span>
+   <p><b>${{it.msg}}</b></p><div class="meta"><span>${{it.event}}</span><span>track ${{it.track}}</span>
    <span>episode ${{it.start}}s → alert ${{it.t}}s</span>
    <span class="conf">confidence ${{it.conf===null?'n/a':it.conf.toFixed(2)}}</span>
    ${{d?`<span>decision: ${{d.decision}} (${{d.secs.toFixed(1)}} s)</span>`:''}}</div>
