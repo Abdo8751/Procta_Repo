@@ -1,0 +1,20 @@
+start_s,end_s,event_type,instruction
+0,20,none,Sit still and write normally (seat calibration)
+20,35,phone_in_hand,Take the phone out and use it in your hand
+35,55,none,Put the phone away and write normally
+55,57,phone_in_hand,BRIEF glance: phone in hand for ~2 s only (should NOT alert)
+57,80,none,Write normally
+80,110,phone_on_desk,Place the phone on the desk next to the paper and keep writing
+110,130,none,Put the phone away and write normally
+130,160,phone_in_hand,Use the phone in your hand - move it around and partly cover it with your hand
+160,180,none,Put the phone away and write normally
+180,188,unusual_seat_movement,Lean far to the side as if looking at a neighbour's desk
+188,210,none,Sit back and write normally
+210,212,body_movement,Stretch your arms quickly for ~2 s (should NOT alert)
+212,240,none,Write normally
+240,250,unusual_seat_movement,Slide the chair sideways (~50 cm) and stay there
+250,270,none,Move back to your seat and write normally
+270,280,body_movement,Fidget - turn around / look behind repeatedly
+280,300,none,Write normally
+300,320,phone_in_hand,Use the phone low near the desk edge (partly hidden)
+320,360,none,Write normally until the end

@@ -1,0 +1,186 @@
+{
+ "sweep": [
+  {
+   "miss_rate": 0.0,
+   "policy": "baseline",
+   "precision": 0.898,
+   "recall": 0.995,
+   "false_alarms_per_min": 0.13,
+   "mean_latency_s": 3.023,
+   "alerts_per_episode": 1.0,
+   "alerts": 12.05
+  },
+  {
+   "miss_rate": 0.0,
+   "policy": "improved",
+   "precision": 0.904,
+   "recall": 0.995,
+   "false_alarms_per_min": 0.125,
+   "mean_latency_s": 2.987,
+   "alerts_per_episode": 1.0,
+   "alerts": 12.0
+  },
+  {
+   "miss_rate": 0.05,
+   "policy": "baseline",
+   "precision": 0.952,
+   "recall": 0.99,
+   "false_alarms_per_min": 0.115,
+   "mean_latency_s": 3.921,
+   "alerts_per_episode": 2.289,
+   "alerts": 23.7
+  },
+  {
+   "miss_rate": 0.05,
+   "policy": "improved",
+   "precision": 0.908,
+   "recall": 0.99,
+   "false_alarms_per_min": 0.115,
+   "mean_latency_s": 3.039,
+   "alerts_per_episode": 1.134,
+   "alerts": 12.35
+  },
+  {
+   "miss_rate": 0.1,
+   "policy": "baseline",
+   "precision": 0.953,
+   "recall": 0.939,
+   "false_alarms_per_min": 0.12,
+   "mean_latency_s": 5.051,
+   "alerts_per_episode": 2.623,
+   "alerts": 25.85
+  },
+  {
+   "miss_rate": 0.1,
+   "policy": "improved",
+   "precision": 0.92,
+   "recall": 0.982,
+   "false_alarms_per_min": 0.125,
+   "mean_latency_s": 3.119,
+   "alerts_per_episode": 1.267,
+   "alerts": 13.85
+  },
+  {
+   "miss_rate": 0.2,
+   "policy": "baseline",
+   "precision": 0.955,
+   "recall": 0.765,
+   "false_alarms_per_min": 0.065,
+   "mean_latency_s": 7.963,
+   "alerts_per_episode": 1.897,
+   "alerts": 14.45
+  },
+  {
+   "miss_rate": 0.2,
+   "policy": "improved",
+   "precision": 0.948,
+   "recall": 0.989,
+   "false_alarms_per_min": 0.075,
+   "mean_latency_s": 3.372,
+   "alerts_per_episode": 1.382,
+   "alerts": 13.95
+  },
+  {
+   "miss_rate": 0.3,
+   "policy": "baseline",
+   "precision": 0.804,
+   "recall": 0.42,
+   "false_alarms_per_min": 0.145,
+   "mean_latency_s": 13.342,
+   "alerts_per_episode": 1.349,
+   "alerts": 7.05
+  },
+  {
+   "miss_rate": 0.3,
+   "policy": "improved",
+   "precision": 0.906,
+   "recall": 0.973,
+   "false_alarms_per_min": 0.155,
+   "mean_latency_s": 4.672,
+   "alerts_per_episode": 1.508,
+   "alerts": 16.1
+  },
+  {
+   "miss_rate": 0.4,
+   "policy": "baseline",
+   "precision": 0.385,
+   "recall": 0.092,
+   "false_alarms_per_min": 0.13,
+   "mean_latency_s": 13.789,
+   "alerts_per_episode": 1.0,
+   "alerts": 2.25
+  },
+  {
+   "miss_rate": 0.4,
+   "policy": "improved",
+   "precision": 0.907,
+   "recall": 0.862,
+   "false_alarms_per_min": 0.135,
+   "mean_latency_s": 6.269,
+   "alerts_per_episode": 1.366,
+   "alerts": 13.85
+  },
+  {
+   "miss_rate": 0.5,
+   "policy": "baseline",
+   "precision": 0.045,
+   "recall": 0.006,
+   "false_alarms_per_min": 0.08,
+   "mean_latency_s": 3.544,
+   "alerts_per_episode": 1.0,
+   "alerts": 0.85
+  },
+  {
+   "miss_rate": 0.5,
+   "policy": "improved",
+   "precision": 0.866,
+   "recall": 0.441,
+   "false_alarms_per_min": 0.09,
+   "mean_latency_s": 9.058,
+   "alerts_per_episode": 1.281,
+   "alerts": 6.5
+  }
+ ],
+ "gap_ablation_at_miss_0.2": [
+  {
+   "gap_tolerance_s": 0.0,
+   "min_positive_ratio": 0.6,
+   "precision": 0.955,
+   "recall": 0.765,
+   "false_alarms_per_min": 0.065,
+   "alerts_per_episode": 1.897
+  },
+  {
+   "gap_tolerance_s": 0.25,
+   "min_positive_ratio": 0.6,
+   "precision": 0.97,
+   "recall": 0.915,
+   "false_alarms_per_min": 0.07,
+   "alerts_per_episode": 2.427
+  },
+  {
+   "gap_tolerance_s": 0.5,
+   "min_positive_ratio": 0.6,
+   "precision": 0.966,
+   "recall": 0.973,
+   "false_alarms_per_min": 0.075,
+   "alerts_per_episode": 2.151
+  },
+  {
+   "gap_tolerance_s": 1.0,
+   "min_positive_ratio": 0.6,
+   "precision": 0.948,
+   "recall": 0.989,
+   "false_alarms_per_min": 0.075,
+   "alerts_per_episode": 1.382
+  },
+  {
+   "gap_tolerance_s": 2.0,
+   "min_positive_ratio": 0.6,
+   "precision": 0.928,
+   "recall": 0.983,
+   "false_alarms_per_min": 0.08,
+   "alerts_per_episode": 1.013
+  }
+ ]
+}

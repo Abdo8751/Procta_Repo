@@ -1,0 +1,6 @@
+ultralytics>=8.1
+opencv-python
+numpy
+lap            # needed by Ultralytics' ByteTrack tracker
+matplotlib     # simulation plot
+pytest         # unit tests

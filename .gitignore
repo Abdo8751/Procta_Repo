@@ -1,0 +1,18 @@
+# Raw video of people never goes into git (privacy + size). Keep it on the
+# encrypted project drive only, and delete per the retention plan.
+data/videos/
+data/detections/
+results/live_*/
+results/*/evidence/
+results/*/review_*.html
+
+# model weights are downloaded automatically by Ultralytics
+models/*.pt
+*.pt
+
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+.DS_Store

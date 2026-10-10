@@ -1,0 +1,119 @@
+"""Temporal alerting policies: per-frame signals -> discrete, reviewable alerts.
+
+BaselinePersistence  - the rule from procta_live_baseline.py: alert once a signal
+                       has been on for persistence_s *without a single off frame*.
+                       One missed detection resets the timer, and after the episode
+                       "ends" the next on-frame starts a fresh one -> a single long
+                       phone use is split into several alerts (fragmentation), and a
+                       flickery true episode may never alert at all.
+
+ConfidenceAwareAlerter - the proposed improvement:
+  * episodes survive detector drop-outs shorter than gap_tolerance_s
+  * an episode alerts once it is >= persistence_s long AND the signal was actually
+    on for >= min_positive_ratio of it
+  * exactly one alert per episode (less human review effort)
+  * each alert carries a confidence = mean detector confidence x positive ratio,
+    so the dashboard can rank / triage alerts instead of showing a flat list
+"""
+
+from dataclasses import dataclass, asdict
+
+from .config import Config, EVENT_TYPES
+
+
+@dataclass
+class Alert:
+    track_id: int
+    event_type: str
+    t_alert: float          # time the alert fired (video seconds)
+    t_start: float          # time the underlying episode started
+    confidence: float = float("nan")
+    positive_ratio: float = float("nan")
+
+    def to_row(self):
+        return asdict(self)
+
+
+class BaselinePersistence:
+    def __init__(self, cfg: Config):
+        self.thr = cfg.persistence_s
+        self.start, self.alerted = {}, set()
+
+    def step(self, t: float, signals: dict, present_tracks: set):
+        alerts = []
+        # baseline only updates the 4 events of tracks visible in this frame
+        for tid in present_tracks:
+            for ev in EVENT_TYPES:
+                key = (tid, ev)
+                if key not in signals:
+                    self.start.pop(key, None)
+                    self.alerted.discard(key)
+                    continue
+                self.start.setdefault(key, t)
+                if t - self.start[key] >= self.thr and key not in self.alerted:
+                    self.alerted.add(key)
+                    alerts.append(Alert(tid, ev, t, self.start[key], signals[key], 1.0))
+        return alerts
+
+
+class _Episode:
+    __slots__ = ("start", "last_on", "last_t", "on_time", "conf_sum", "n_on", "alerted")
+
+    def __init__(self, t):
+        self.start = self.last_on = self.last_t = t
+        self.on_time = 0.0
+        self.conf_sum = 0.0
+        self.n_on = 0
+        self.alerted = False
+
+
+class ConfidenceAwareAlerter:
+    def __init__(self, cfg: Config):
+        self.cfg = cfg
+        self.eps = {}
+
+    def step(self, t: float, signals: dict, present_tracks: set = None):
+        cfg, alerts = self.cfg, []
+        for key, conf in signals.items():
+            ep = self.eps.get(key)
+            if ep is None:
+                ep = self.eps[key] = _Episode(t)
+            else:
+                # time since last frame counts as "on" only if previous frame was on
+                if ep.last_on == ep.last_t:
+                    ep.on_time += t - ep.last_t
+                ep.last_on = t
+            ep.last_t = t
+            ep.conf_sum += conf
+            ep.n_on += 1
+
+        for key in list(self.eps):
+            ep = self.eps[key]
+            if key not in signals:
+                ep.last_t = t                  # off time is not credited to on_time
+                if t - ep.last_on > cfg.gap_tolerance_s:
+                    del self.eps[key]          # episode over
+                continue
+            dur = t - ep.start
+            ratio = ep.on_time / dur if dur > 0 else 1.0
+            if not ep.alerted and dur >= cfg.persistence_s and ratio >= cfg.min_positive_ratio:
+                conf = (ep.conf_sum / ep.n_on) * min(1.0, ratio)
+                ep.alerted = True
+                if conf >= cfg.min_alert_confidence:
+                    alerts.append(Alert(key[0], key[1], t, ep.start, round(conf, 3), round(ratio, 3)))
+        return alerts
+
+
+def make_policy(mode: str, cfg: Config):
+    return BaselinePersistence(cfg) if mode == "baseline" else ConfidenceAwareAlerter(cfg)
+
+
+def run_policy(frames, mode: str, cfg: Config):
+    """Replay cached detections through signals + temporal policy -> list[Alert]."""
+    from .signals import SignalExtractor
+    sig, pol = SignalExtractor(cfg, mode), make_policy(mode, cfg)
+    alerts = []
+    for fr in frames:
+        s = sig(fr)
+        alerts += pol.step(fr["t"], s, {p["id"] for p in fr["persons"]})
+    return alerts
