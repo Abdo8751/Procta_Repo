@@ -4,14 +4,14 @@ Detects a small set of predefined exam-room events in staged, consented mock-exa
 and produces **reviewable, time-stamped, confidence-aware alerts** for a human invigilator.
 The system never concludes that a student cheated.
 
-Events: `phone_in_hand`, `phone_on_desk`, `body_movement`, `unusual_seat_movement`
+Events: `phone_in_hand`, `phone_on_desk`, `body_movement`, `unusual_seat_movement`, `head_turned`
 (definitions and non-examples: [docs/event_definitions.md](docs/event_definitions.md)).
 
 ## Setup
 ```bash
 python -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-python -m pytest -q                                     # 9 tests
+python -m pytest -q                                     # 12 tests
 ```
 YOLOv8 weights download automatically on first run (or put them in `models/`).
 

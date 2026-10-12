@@ -39,7 +39,8 @@ class Alert:
         """Review prompt wording - never a verdict about the student."""
         what = {"phone_in_hand": "mobile-phone interaction", "phone_on_desk": "mobile phone on desk",
                 "body_movement": "sustained body movement",
-                "unusual_seat_movement": "unusual seat/desk movement"}.get(self.event_type, self.event_type)
+                "unusual_seat_movement": "unusual seat/desk movement",
+                "head_turned": "sustained head turn"}.get(self.event_type, self.event_type)
         when = clock or f"{self.t_alert:.1f}s"
         return f"Potential {what} detected at {when} - please review."
 

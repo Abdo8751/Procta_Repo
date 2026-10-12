@@ -5,8 +5,9 @@ so you only need to correct it to what actually happened on video.
 
 Keys:
   space       play / pause            a / d   back / forward 1 s     j / l  back / forward 5 s
-  1 2 3 4     start or end a label at the current time:
+  1 2 3 4 5   start or end a label at the current time:
               1=phone_in_hand  2=phone_on_desk  3=body_movement  4=unusual_seat_movement
+              5=head_turned
   x           delete the label(s) under the current time
   s           save                    q       save and quit
 
@@ -23,9 +24,10 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 KEYS = {ord("1"): "phone_in_hand", ord("2"): "phone_on_desk", ord("3"): "body_movement",
-        ord("4"): "unusual_seat_movement"}
+        ord("4"): "unusual_seat_movement", ord("5"): "head_turned"}
 COLORS = {"phone_in_hand": (0, 0, 255), "phone_on_desk": (0, 140, 255),
-          "body_movement": (255, 0, 200), "unusual_seat_movement": (255, 200, 0)}
+          "body_movement": (255, 0, 200), "unusual_seat_movement": (255, 200, 0),
+          "head_turned": (0, 255, 255)}
 
 
 def main():

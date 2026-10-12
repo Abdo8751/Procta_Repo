@@ -14,7 +14,13 @@ start_s,end_s,event_type,instruction
 212,240,none,Write normally
 240,250,unusual_seat_movement,Slide the chair sideways (~50 cm) and stay there
 250,270,none,Move back to your seat and write normally
-270,280,body_movement,Fidget - turn around / look behind repeatedly
+270,280,body_movement+head_turned,Fidget - turn around / look behind repeatedly
 280,300,none,Write normally
 300,320,phone_in_hand,Use the phone low near the desk edge (partly hidden)
-320,360,none,Write normally until the end
+320,335,none,Write normally
+335,343,head_turned,Turn your head LEFT as if reading a neighbour's paper and hold it
+343,355,none,Face forward and write normally
+355,357,head_turned,BRIEF glance to the right for ~2 s only (should NOT alert)
+357,370,none,Write normally
+370,378,head_turned,Turn your head RIGHT as if reading a neighbour's paper and hold it
+378,390,none,Write normally until the end

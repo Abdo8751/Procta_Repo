@@ -108,7 +108,8 @@ def main():
         wr.writerow(["event_type", "start_s", "end_s", "note"])
         for s in steps:
             if s["event_type"] != "none" and s["start_s"] < end_t:
-                wr.writerow([s["event_type"], s["start_s"], min(s["end_s"], end_t), s["instruction"]])
+                for ev in s["event_type"].split("+"):     # e.g. body_movement+head_turned
+                    wr.writerow([ev, s["start_s"], min(s["end_s"], end_t), s["instruction"]])
     fps_real = len(times) / end_t if end_t else 0
     print(f"Saved {len(times)} frames ({end_t:.1f} s, real {fps_real:.1f} fps) -> {vid_dir / args.name}.mp4")
     print(f"Ground truth from protocol -> {lab_dir / args.name}_gt.csv  (review it with label_video.py)")

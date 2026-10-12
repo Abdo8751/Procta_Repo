@@ -12,13 +12,20 @@ mode="improved" fixes the attribution:
   * each phone is assigned to exactly one owner (the nearest person box);
     phones far from everyone (e.g. on the invigilator's desk) are ignored
   * wrists/shoulders are only used if the pose model's keypoint confidence is high
+
+head_turned (both modes): the nose shifts sideways relative to the eyes when the head
+turns, so yaw = (nose_x - eye-midpoint x) / eye distance (~0 facing the camera).
+Measured against each student's own yaw during seat calibration (camera may be off
+to one side). In profile one eye disappears, which also counts as turned. Looking
+down is deliberately not an event: it is normal when writing on paper.
 """
 
 from collections import defaultdict
 
 import numpy as np
 
-from .config import (Config, LEFT_SHOULDER, LEFT_WRIST, RIGHT_SHOULDER, RIGHT_WRIST)
+from .config import (Config, LEFT_EYE, LEFT_SHOULDER, LEFT_WRIST, NOSE, RIGHT_EYE, RIGHT_SHOULDER,
+                     RIGHT_WRIST)
 
 
 def box_center(b):
@@ -60,6 +67,9 @@ class SignalExtractor:
         self.prev_shoulder = {}                 # track -> (xy, t)
         self.seat_samples = defaultdict(list)
         self.seat_baseline = {}
+        self.head_samples = defaultdict(list)
+        self.head_baseline = {}
+        self.head_yaw = {}                      # track -> latest yaw offset (for the live overlay)
 
     def _kp(self, person, idx):
         x, y, c = person["kps"][idx]
@@ -69,6 +79,23 @@ class SignalExtractor:
         else:
             ok = c >= self.cfg.keypoint_min_conf and not np.allclose(xy, 0)
         return xy, ok, c
+
+    def _yaw(self, pe):
+        """(yaw, confidence) or None if the face is not visible."""
+        n, n_ok, nc = self._kp(pe, NOSE)
+        le, le_ok, lec = self._kp(pe, LEFT_EYE)
+        re, re_ok, rec = self._kp(pe, RIGHT_EYE)
+        if not n_ok:
+            return None
+        if le_ok and re_ok:
+            d = np.linalg.norm(le - re)
+            if d < 1.0:
+                return None
+            return (n[0] - (le[0] + re[0]) / 2.0) / d, float(min(nc, lec, rec))
+        if le_ok or re_ok:                      # profile: one eye hidden behind the nose
+            e, ec = (le, lec) if le_ok else (re, rec)
+            return float(np.sign(n[0] - e[0]) or 1.0), float(min(nc, ec))
+        return None
 
     def __call__(self, frame: dict) -> dict:
         cfg, t = self.cfg, frame["t"]
@@ -113,4 +140,20 @@ class SignalExtractor:
                     self.seat_baseline[tid] = np.mean(self.seat_samples[tid], axis=0)
             elif np.linalg.norm(c - self.seat_baseline[tid]) > cfg.seat_drift_px:
                 out[(tid, "unusual_seat_movement")] = pe["conf"]
+
+            # ---- event 5: head turned left/right (vs calibrated yaw)
+            yaw = self._yaw(pe)
+            if tid not in self.head_baseline:
+                if yaw is not None:
+                    self.head_samples[tid].append(yaw[0])
+                if tid in self.seat_baseline:   # calibrate over the same frames as the seat
+                    s = self.head_samples.pop(tid, [])
+                    self.head_baseline[tid] = float(np.median(s)) if s else 0.0
+            elif yaw is None:
+                self.head_yaw.pop(tid, None)         # face not visible: no head signal
+            else:
+                off = yaw[0] - self.head_baseline[tid]
+                self.head_yaw[tid] = off
+                if abs(off) > cfg.head_yaw_thr:
+                    out[(tid, "head_turned")] = yaw[1]
         return out

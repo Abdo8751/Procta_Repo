@@ -72,6 +72,48 @@ def test_phone_attributed_to_one_owner():
     assert (1, "phone_in_hand") in imp and (2, "phone_on_desk") not in imp
 
 
+def _face_person(pid, nose_dx, hide_eye=None):
+    """Person facing the camera; nose_dx shifts the nose sideways (eye distance = 40 px)."""
+    p = _person(pid, [0, 0, 200, 400], (150, 300))
+    p["kps"][1], p["kps"][2] = [80, 60, 0.9], [120, 60, 0.9]          # eyes
+    p["kps"][0] = [100 + nose_dx, 75, 0.9]                            # nose
+    if hide_eye is not None:
+        p["kps"][hide_eye][2] = 0.05
+    return p
+
+
+def _run_head(sig, frames):
+    return [sig({"t": i / FPS, "persons": [p], "phones": []}) for i, p in enumerate(frames)]
+
+
+def test_head_turn_flagged_after_calibration_only():
+    cfg = Config()
+    sig = SignalExtractor(cfg, "improved")
+    calib = [_face_person(1, 0)] * cfg.calibration_frames
+    out = _run_head(sig, calib + [_face_person(1, 2), _face_person(1, 16), _face_person(1, -16)])
+    assert all((1, "head_turned") not in o for o in out[:-2])        # calibration + facing forward
+    assert (1, "head_turned") in out[-2] and (1, "head_turned") in out[-1]
+
+
+def test_head_yaw_relative_to_calibration_and_profile():
+    cfg = Config()
+    sig = SignalExtractor(cfg, "improved")
+    calib = [_face_person(1, 12)] * cfg.calibration_frames            # camera off to one side
+    out = _run_head(sig, calib + [_face_person(1, 12), _face_person(1, 0, hide_eye=2)])
+    assert (1, "head_turned") not in out[-2]                          # normal pose for this student
+    assert (1, "head_turned") in out[-1]                              # profile: one eye hidden
+
+
+def test_head_turn_alerts_once_after_3s_not_for_glance():
+    pat = [1] * 20 + [0] * 30 + [1] * 50 + [0] * 20                   # 2 s glance, then 5 s turn
+    alerts = []
+    pol = ConfidenceAwareAlerter(Config())
+    for i, on in enumerate(pat):
+        alerts += pol.step(i / FPS, {(1, "head_turned"): 0.9} if on else {}, {1})
+    assert len(alerts) == 1 and alerts[0].event_type == "head_turned"
+    assert alerts[0].message("10:00:00") == "Potential sustained head turn detected at 10:00:00 - please review."
+
+
 def test_evaluation_counts():
     gt = [{"event_type": "phone_in_hand", "start_s": 10, "end_s": 20},
           {"event_type": "phone_in_hand", "start_s": 40, "end_s": 41}]      # too short = not a target
@@ -95,3 +137,4 @@ def test_alert_message_is_not_a_verdict():
     m = Alert(7, "phone_in_hand", 12.0, 9.0).message("10:43:21")
     assert m == "Potential mobile-phone interaction detected at 10:43:21 - please review."
     assert "cheat" not in m.lower()
+

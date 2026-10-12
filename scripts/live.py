@@ -86,6 +86,12 @@ def main():
                 print(f"[{t:7.1f}s] track {a.track_id}: {msg}{conf}")
             recent = [r for r in recent if r[0] > t]
             img = annotate(frame, dets, signals, [r[1] for r in recent], show_pose=show_pose)
+            for p in dets["persons"]:             # head yaw vs calibration, to tune head_yaw_thr
+                yaw = sig.head_yaw.get(p["id"])
+                if yaw is not None:
+                    turned = abs(yaw) > cfg.head_yaw_thr
+                    cv2.putText(img, f"yaw {yaw:+.2f}", (int(p["box"][0]), int(p["box"][1]) + 18),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255) if turned else (0, 200, 0), 1)
             if not dets["persons"]:
                 cv2.putText(img, "no person detected - sit further back / more light", (10, img.shape[0] - 35),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)

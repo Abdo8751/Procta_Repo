@@ -10,8 +10,11 @@ below says what counts, what must **not** trigger an alert, and how the label is
 | `phone_on_desk` | A phone is visible on the student's own desk, not in the hand | Phone on the invigilator's desk or a neighbour's desk; phone in a closed bag; phone already counted as in-hand | Phone placed on desk → phone removed |
 | `body_movement` | Sustained large upper-body movement: repeatedly turning around, looking behind, twisting towards a neighbour | Stretching, adjusting posture, reaching for a pen, a single head turn, < 3 s of movement | First frame of the sustained movement → last |
 | `unusual_seat_movement` | Student's body leaves their normal seat position: leaning far into the aisle/neighbour's space, sliding the chair, standing up | Leaning forward to write, small posture shifts, sitting back | Leaves the normal position → returns |
+| `head_turned` | Head turned clearly left or right away from the student's own work/screen (e.g. towards a neighbour's paper) and held | A head turn or glance < 3 s; looking down at own paper (not an event: normal when writing); small head tilts | Head turns away → faces forward again |
 
 ## Known ambiguities to discuss
 - `body_movement` overlaps with `unusual_seat_movement` (leaning sideways is both). For v1 they are labelled independently; overlapping labels are allowed.
 - `phone_on_desk` may be permitted in some exam rules (phone face-down, switched off). It is kept as a low-priority event whose relevance the invigilator decides.
+- `head_turned` overlaps with `body_movement` when turning around; the protocol labels both (`body_movement+head_turned`).
+  It is measured from face keypoints (nose vs eyes) relative to the yaw recorded during seat calibration, so the student must face their work during the first ~2 s.
 - Track identity: staged sessions use one student per camera so evaluation ignores track ids; multi-student scenes are a later step.

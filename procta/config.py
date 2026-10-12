@@ -8,8 +8,10 @@ PERSON_CLASS_ID = 0
 PHONE_CLASS_ID = 67          # 'cell phone'
 LEFT_SHOULDER, RIGHT_SHOULDER = 5, 6
 LEFT_WRIST, RIGHT_WRIST = 9, 10
+NOSE, LEFT_EYE, RIGHT_EYE = 0, 1, 2
 
-EVENT_TYPES = ("phone_in_hand", "phone_on_desk", "body_movement", "unusual_seat_movement")
+EVENT_TYPES = ("phone_in_hand", "phone_on_desk", "body_movement", "unusual_seat_movement",
+               "head_turned")
 
 
 @dataclass
@@ -27,6 +29,7 @@ class Config:
     body_movement_speed: float = 150.0      # shoulder-centroid speed, px/s
     seat_drift_px: float = 80.0             # distance from calibrated seat centroid, px
     calibration_frames: int = 30
+    head_yaw_thr: float = 0.25              # |yaw - calibrated yaw|, yaw = (nose_x - eye-mid x) / eye distance
 
     # --- temporal alerting (both modes) ---
     persistence_s: float = 3.0              # "alert only if behaviour persists > 3 s"
