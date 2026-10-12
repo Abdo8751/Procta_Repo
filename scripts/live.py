@@ -19,6 +19,7 @@ import cv2
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from procta.camera import open_camera  # noqa: E402
 from procta.config import Config  # noqa: E402
 from procta.detect import Detector  # noqa: E402
 from procta.draw import annotate  # noqa: E402
@@ -33,6 +34,8 @@ def main():
     ap.add_argument("--record", action="store_true")
     ap.add_argument("--imgsz", type=int, default=416)
     ap.add_argument("--det-skip", type=int, default=2)
+    ap.add_argument("--width", type=int, default=1280)
+    ap.add_argument("--height", type=int, default=720)
     args = ap.parse_args()
 
     cfg = Config(imgsz=args.imgsz, det_frame_skip=args.det_skip,
@@ -41,9 +44,8 @@ def main():
     out = ROOT / "results" / name
     (out / "evidence").mkdir(parents=True, exist_ok=True)
 
-    cap = cv2.VideoCapture(args.camera)
-    if not cap.isOpened():
-        sys.exit(f"Could not open camera {args.camera}")
+    cap = open_camera(args.camera, args.width, args.height)
+    show_pose = True
     det, sig, pol = Detector(cfg), SignalExtractor(cfg, args.mode), make_policy(args.mode, cfg)
 
     writer, times = None, []
@@ -52,7 +54,7 @@ def main():
     wr.writerow(["track_id", "event_type", "t_alert", "t_start", "confidence", "positive_ratio", "evidence"])
     recent = []          # (until_t, text) banners
     start, prev = time.time(), time.time()
-    print(f"Mode={args.mode}. Sit still ~2 s for seat calibration. Press 'q' to quit. Output -> {out}")
+    print(f"Mode={args.mode}. Sit still ~2 s for seat calibration. 'k' = show/hide pose, 'q' = quit. Output -> {out}")
     try:
         while True:
             ok, frame = cap.read()
@@ -71,7 +73,7 @@ def main():
             dets = det(frame, t)
             signals = sig(dets)
             alerts = pol.step(t, signals, {p["id"] for p in dets["persons"]})
-            img = annotate(frame, dets, signals)
+            img = annotate(frame, dets, signals, show_pose=show_pose)
             for a in alerts:
                 ev_file = out / "evidence" / f"{a.t_alert:07.1f}s_track{a.track_id}_{a.event_type}.jpg"
                 cv2.imwrite(str(ev_file), img)
@@ -83,12 +85,18 @@ def main():
                 recent.append((t + 4, f"track {a.track_id}: {msg}{conf}"))
                 print(f"[{t:7.1f}s] track {a.track_id}: {msg}{conf}")
             recent = [r for r in recent if r[0] > t]
-            img = annotate(frame, dets, signals, [r[1] for r in recent])
+            img = annotate(frame, dets, signals, [r[1] for r in recent], show_pose=show_pose)
+            if not dets["persons"]:
+                cv2.putText(img, "no person detected - sit further back / more light", (10, img.shape[0] - 35),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
             cv2.putText(img, f"FPS {fps:.1f}  t={t:.0f}s  mode={args.mode}", (10, img.shape[0] - 10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
             cv2.imshow("PROCTA live", img)
-            if cv2.waitKey(1) & 0xFF == ord("q"):
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord("q"):
                 break
+            if key == ord("k"):
+                show_pose = not show_pose
     finally:
         cap.release()
         log.close()

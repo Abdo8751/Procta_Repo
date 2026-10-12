@@ -46,9 +46,9 @@ def main():
     vid_dir.mkdir(parents=True, exist_ok=True)
     lab_dir.mkdir(parents=True, exist_ok=True)
 
-    cap = cv2.VideoCapture(args.camera)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, args.width)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, args.height)
+    sys.path.insert(0, str(ROOT))
+    from procta.camera import open_camera
+    cap = open_camera(args.camera, args.width, args.height)
     ok, frame = cap.read()
     if not ok:
         sys.exit("Could not read from camera")
