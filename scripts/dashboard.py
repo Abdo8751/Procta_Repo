@@ -1,0 +1,235 @@
+"""Local alert dashboard: every live alert from results/alerts.db, updating while
+live.py runs, with Confirm / Dismiss review buttons that are saved to the database.
+
+  python scripts/dashboard.py                # then open http://localhost:8765
+  python scripts/dashboard.py --port 9000
+
+Only listens on 127.0.0.1: evidence images show real people and never leave this PC.
+Older results/live_* sessions (from before the log existed) are imported on start.
+"""
+
+import argparse
+import csv
+import io
+import json
+import sys
+from datetime import datetime
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import parse_qs, urlparse
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from procta.alert_log import connect, import_live_dirs  # noqa: E402
+
+RESULTS = ROOT / "results"
+DB = RESULTS / "alerts.db"
+CSV_COLS = ["id", "session", "mode", "timestamp", "t_session_s", "track_id", "event_type", "alert_name",
+            "message", "confidence", "confidence_level", "positive_ratio", "episode_start_s", "duration_s",
+            "evidence", "review", "reviewed_at"]
+
+
+def query_alerts(session=None):
+    con = connect(DB)
+    sql, args = "SELECT * FROM alerts", ()
+    if session:
+        sql, args = sql + " WHERE session=?", (session,)
+    rows = [dict(r) for r in con.execute(sql + " ORDER BY timestamp DESC, id DESC", args)]
+    con.close()
+    return rows
+
+
+def query_sessions():
+    con = connect(DB)
+    rows = [dict(r) for r in con.execute(
+        "SELECT s.session, s.mode, s.started_at, s.ended_at, s.resolution, COUNT(a.id) AS n_alerts"
+        " FROM sessions s LEFT JOIN alerts a ON a.session = s.session"
+        " GROUP BY s.session ORDER BY s.started_at DESC")]
+    con.close()
+    for r in rows:
+        r.pop("config_json", None)
+    return rows
+
+
+class Handler(BaseHTTPRequestHandler):
+    def _send(self, body, ctype="application/json", code=200, extra=None):
+        data = body if isinstance(body, bytes) else body.encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        for k, v in (extra or {}).items():
+            self.send_header(k, v)
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_GET(self):
+        url = urlparse(self.path)
+        q = {k: v[0] for k, v in parse_qs(url.query).items()}
+        if url.path == "/":
+            return self._send(PAGE, "text/html; charset=utf-8")
+        if url.path == "/api/alerts":
+            return self._send(json.dumps(query_alerts(q.get("session"))))
+        if url.path == "/api/sessions":
+            return self._send(json.dumps(query_sessions()))
+        if url.path == "/api/export.csv":
+            buf = io.StringIO()
+            w = csv.DictWriter(buf, CSV_COLS, extrasaction="ignore")
+            w.writeheader()
+            w.writerows(query_alerts(q.get("session")))
+            name = f"procta_alerts_{q.get('session') or 'all'}.csv"
+            return self._send(buf.getvalue(), "text/csv; charset=utf-8",
+                              extra={"Content-Disposition": f'attachment; filename="{name}"'})
+        if url.path.startswith("/evidence/"):
+            f = (RESULTS / url.path[len("/evidence/"):]).resolve()
+            if RESULTS.resolve() in f.parents and f.suffix.lower() in (".jpg", ".png") and f.is_file():
+                return self._send(f.read_bytes(), "image/jpeg")
+            return self._send(b"not found", "text/plain", 404)
+        return self._send(b"not found", "text/plain", 404)
+
+    def do_POST(self):
+        if urlparse(self.path).path != "/api/review":
+            return self._send(b"not found", "text/plain", 404)
+        body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
+        decision = body.get("review")
+        if decision not in ("confirmed", "dismissed", None):
+            return self._send(json.dumps({"error": "bad review"}), code=400)
+        con = connect(DB)
+        with con:
+            con.execute("UPDATE alerts SET review=?, reviewed_at=? WHERE id=?",
+                        (decision, datetime.now().isoformat(timespec="seconds") if decision else None,
+                         int(body["id"])))
+        con.close()
+        return self._send(json.dumps({"ok": True}))
+
+    def log_message(self, *args):          # keep the terminal quiet
+        pass
+
+
+PAGE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PROCTA Alerts</title>
+<style>
+:root{--bg:#f4f5f7;--card:#fff;--text:#1d2430;--muted:#667085;--line:#e3e6ea;--accent:#1f4e8c;
+ --high:#1e7b3a;--med:#b26a00;--low:#b42318;--ok:#1e7b3a;--no:#6b7280}
+@media (prefers-color-scheme:dark){:root{--bg:#12161c;--card:#1b2129;--text:#e6e9ee;--muted:#98a2b3;
+ --line:#2c3440;--accent:#7fb0f0;--high:#4cc274;--med:#f0a640;--low:#f07167;--ok:#4cc274;--no:#98a2b3}}
+*{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,Segoe UI,sans-serif}
+header{padding:14px 20px;border-bottom:1px solid var(--line);display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+header h1{font-size:18px;margin:0 12px 0 0} header .note{color:var(--muted);font-size:12px;flex-basis:100%}
+select,button,a.btn{font:inherit;padding:6px 10px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--text);cursor:pointer;text-decoration:none}
+main{padding:16px 20px;max-width:1300px;margin:0 auto}
+.live{display:inline-flex;align-items:center;gap:6px;color:var(--muted)} .dot{width:9px;height:9px;border-radius:50%;background:var(--muted)}
+.dot.on{background:var(--low);animation:p 1.2s infinite} @keyframes p{50%{opacity:.3}}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-bottom:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px 14px}
+.card .k{color:var(--muted);font-size:12px} .card .v{font-size:24px;font-weight:600;font-variant-numeric:tabular-nums}
+h2{font-size:15px;margin:18px 0 8px}
+.wrap{overflow-x:auto;background:var(--card);border:1px solid var(--line);border-radius:8px}
+table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}
+th,td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap;vertical-align:middle}
+th{font-size:12px;color:var(--muted);font-weight:600} tr:last-child td{border-bottom:0}
+tr.new td{animation:hl 3s} @keyframes hl{from{background:rgba(255,200,0,.25)}}
+.bar{display:inline-block;width:70px;height:7px;border-radius:4px;background:var(--line);margin-right:6px;vertical-align:middle;overflow:hidden}
+.bar i{display:block;height:100%} .High{color:var(--high)} .Medium{color:var(--med)} .Low{color:var(--low)}
+.bar .High{background:var(--high)} .bar .Medium{background:var(--med)} .bar .Low{background:var(--low)}
+img.thumb{height:44px;border-radius:4px;cursor:zoom-in;display:block}
+button.ok{border-color:var(--ok);color:var(--ok)} button.no{border-color:var(--no);color:var(--no)}
+.tag{padding:2px 8px;border-radius:10px;font-size:12px;border:1px solid currentColor}
+.confirmed{color:var(--ok)} .dismissed{color:var(--no)}
+#modal{position:fixed;inset:0;background:rgba(0,0,0,.8);display:none;align-items:center;justify-content:center;padding:16px}
+#modal img{max-width:100%;max-height:100%} .muted{color:var(--muted)} .empty{padding:24px;text-align:center;color:var(--muted)}
+</style></head><body>
+<header><h1>PROCTA alert log</h1>
+ <label>Session <select id="session"><option value="">All sessions</option></select></label>
+ <label>Alert <select id="type"><option value="">All types</option></select></label>
+ <a class="btn" id="csv" href="/api/export.csv">Download CSV</a>
+ <span class="live"><span class="dot" id="dot"></span><span id="livetxt">idle</span></span>
+ <div class="note">Alerts are prompts for human review only &mdash; the system never decides that a student cheated.
+ Confidence = detector confidence &times; how consistently the behaviour was seen. Accuracy = confirmed &divide; reviewed.</div>
+</header>
+<main>
+ <div class="cards">
+  <div class="card"><div class="k">Alerts</div><div class="v" id="c_total">0</div></div>
+  <div class="card"><div class="k">Reviewed</div><div class="v" id="c_rev">0</div></div>
+  <div class="card"><div class="k">Accuracy (confirmed / reviewed)</div><div class="v" id="c_acc">&ndash;</div></div>
+  <div class="card"><div class="k">Average confidence</div><div class="v" id="c_conf">&ndash;</div></div>
+  <div class="card"><div class="k">Alerts per minute (selected sessions)</div><div class="v" id="c_rate">&ndash;</div></div>
+ </div>
+ <h2>By alert type</h2>
+ <div class="wrap"><table><thead><tr><th>Alert</th><th>Count</th><th>Avg confidence</th><th>Confirmed</th><th>Dismissed</th><th>Not reviewed</th><th>Accuracy</th></tr></thead><tbody id="types"></tbody></table></div>
+ <h2>Alerts (newest first)</h2>
+ <div class="wrap"><table><thead><tr><th>Time</th><th>Session time</th><th>Alert</th><th>Track</th><th>Confidence</th>
+  <th>Consistency</th><th>Lasted before alert</th><th>Mode</th><th>Evidence</th><th>Review</th></tr></thead><tbody id="rows"></tbody></table></div>
+</main>
+<div id="modal" onclick="this.style.display='none'"><img id="big" alt="evidence"></div>
+<script>
+const $=id=>document.getElementById(id); let alerts=[], sessions=[], seen=null, sig='';
+const pct=x=>x==null?'–':(100*x).toFixed(0)+'%', num=(x,d=2)=>x==null?'–':x.toFixed(d);
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+async function load(){
+ const s=$('session').value;
+ const [a,ss]=await Promise.all([fetch('/api/alerts'+(s?'?session='+encodeURIComponent(s):'')).then(r=>r.json()),
+                                 fetch('/api/sessions').then(r=>r.json())]);
+ const nsig=JSON.stringify([a.map(x=>[x.id,x.review]),ss.map(x=>[x.session,x.ended_at,x.n_alerts])]);
+ if(nsig===sig) return; sig=nsig; alerts=a; sessions=ss; render();
+}
+function render(){
+ const sel=$('session'), cur=sel.value;
+ sel.innerHTML='<option value="">All sessions</option>'+sessions.map(x=>`<option value="${esc(x.session)}">${esc(x.session)} (${x.n_alerts})${x.ended_at===null?' ● live':''}</option>`).join('');
+ sel.value=cur;
+ const running=sessions.filter(x=>x.ended_at===null);
+ $('dot').className='dot'+(running.length?' on':''); $('livetxt').textContent=running.length?'live session running':'no live session';
+ $('csv').href='/api/export.csv'+(cur?'?session='+encodeURIComponent(cur):'');
+ const tsel=$('type'), tcur=tsel.value, names=[...new Set(alerts.map(a=>a.alert_name))].sort();
+ tsel.innerHTML='<option value="">All types</option>'+names.map(n=>`<option>${esc(n)}</option>`).join(''); tsel.value=tcur;
+ const list=alerts.filter(a=>!tsel.value||a.alert_name===tsel.value);
+ const rev=list.filter(a=>a.review), conf=list.filter(a=>a.confidence!=null);
+ $('c_total').textContent=list.length; $('c_rev').textContent=rev.length;
+ $('c_acc').textContent=rev.length?pct(rev.filter(a=>a.review==='confirmed').length/rev.length):'–';
+ $('c_conf').textContent=conf.length?num(conf.reduce((s,a)=>s+a.confidence,0)/conf.length):'–';
+ const used=sessions.filter(x=>!cur||x.session===cur); let mins=0;
+ for(const x of used){const sa=alerts.filter(a=>a.session===x.session); const end=x.ended_at?new Date(x.ended_at):(x.ended_at===null?new Date():null);
+  mins+=end?Math.max(0,(end-new Date(x.started_at))/60000):Math.max(0,...sa.map(a=>a.t_session_s))/60;}
+ $('c_rate').textContent=mins>0.05?num(list.length/mins):'–';
+ const by={}; for(const a of list){const t=by[a.alert_name]??={n:0,c:0,cn:0,ok:0,no:0}; t.n++; if(a.confidence!=null){t.c+=a.confidence;t.cn++}
+  if(a.review==='confirmed')t.ok++; if(a.review==='dismissed')t.no++;}
+ $('types').innerHTML=Object.entries(by).map(([n,t])=>`<tr><td>${esc(n)}</td><td>${t.n}</td><td>${t.cn?num(t.c/t.cn):'–'}</td><td>${t.ok}</td><td>${t.no}</td><td>${t.n-t.ok-t.no}</td><td>${t.ok+t.no?pct(t.ok/(t.ok+t.no)):'–'}</td></tr>`).join('')
+  ||'<tr><td colspan="7" class="empty">No alerts yet</td></tr>';
+ const ids=new Set(alerts.map(a=>a.id));
+ $('rows').innerHTML=list.map(a=>{const lvl=a.confidence_level, isNew=seen&&!seen.has(a.id);
+  return `<tr class="${isNew?'new':''}"><td>${esc(a.timestamp.replace('T',' '))}</td><td>${num(a.t_session_s,1)} s</td>
+  <td title="${esc(a.message)}"><b>${esc(a.alert_name)}</b></td><td>${a.track_id}</td>
+  <td><span class="bar"><i class="${lvl}" style="width:${(a.confidence??0)*100}%"></i></span><span class="${lvl}">${num(a.confidence)} ${lvl}</span></td>
+  <td>${pct(a.positive_ratio)}</td><td>${num(a.duration_s,1)} s</td><td>${esc(a.mode)}</td>
+  <td>${a.evidence?`<img class="thumb" loading="lazy" src="/evidence/${encodeURI(a.evidence)}" onclick="zoom(this.src)" alt="evidence">`:'<span class="muted">none</span>'}</td>
+  <td>${a.review?`<span class="tag ${a.review}">${a.review}</span> <button onclick="review(${a.id},null)">undo</button>`
+   :`<button class="ok" onclick="review(${a.id},'confirmed')">Confirm</button> <button class="no" onclick="review(${a.id},'dismissed')">Dismiss</button>`}</td></tr>`}).join('')
+  ||'<tr><td colspan="10" class="empty">No alerts yet &mdash; run python scripts/live.py</td></tr>';
+ seen=ids;
+}
+async function review(id,r){await fetch('/api/review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,review:r})}); await load();}
+function zoom(src){$('big').src=src; $('modal').style.display='flex';}
+$('session').onchange=()=>{sig='';seen=null;load()}; $('type').onchange=render;
+load(); setInterval(load,2000);
+</script></body></html>"""
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--port", type=int, default=8765)
+    args = ap.parse_args()
+    added = import_live_dirs(DB, RESULTS)
+    if added:
+        print(f"Imported {len(added)} older live session(s): {', '.join(added)}")
+    srv = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
+    print(f"PROCTA dashboard -> http://localhost:{args.port}   (Ctrl+C to stop)")
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        pass
+
+
+if __name__ == "__main__":
+    main()

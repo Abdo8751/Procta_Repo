@@ -5,6 +5,7 @@ data/detections/
 results/live_*/
 results/*/evidence/
 results/*/review_*.html
+results/alerts.db*
 
 # model weights are downloaded automatically by Ultralytics
 models/*.pt

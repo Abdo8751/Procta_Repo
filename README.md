@@ -11,7 +11,7 @@ Events: `phone_in_hand`, `phone_on_desk`, `body_movement`, `unusual_seat_movemen
 ```bash
 python -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-python -m pytest -q                                     # 12 tests
+python -m pytest -q                                     # 13 tests
 ```
 YOLOv8 weights download automatically on first run (or put them in `models/`).
 
@@ -33,6 +33,10 @@ python scripts/run_offline.py --detections data/detections/s01_daylight.jsonl \
 
 # Live demo: --mode frame | baseline (= original script) | improved
 python scripts/live.py --mode improved
+
+# Alert log + dashboard: every live alert (time, alert name, confidence, consistency, evidence)
+# goes into results/alerts.db; review alerts and see accuracy (confirmed / reviewed) at
+python scripts/dashboard.py        # -> http://localhost:8765, 'Download CSV' for Excel
 ```
 Other: `scripts/simulate_detector_noise.py` (controlled detector-flicker experiment),
 `scripts/analyze_live_log.py` (stats on the original live log).

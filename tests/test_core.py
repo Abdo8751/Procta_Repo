@@ -138,3 +138,15 @@ def test_alert_message_is_not_a_verdict():
     assert m == "Potential mobile-phone interaction detected at 10:43:21 - please review."
     assert "cheat" not in m.lower()
 
+
+def test_alert_log_records_detailed_alert(tmp_path):
+    from datetime import datetime
+    from procta.alert_log import AlertLog, connect
+    from procta.temporal import Alert
+    log = AlertLog(tmp_path / "a.db", "live_x", "improved", datetime(2026, 10, 12, 13, 50, 0))
+    log.add(Alert(1, "head_turned", 13.0, 10.0, 0.915, 1.0), "live_x/evidence/e.jpg")
+    log.close()
+    r = dict(connect(tmp_path / "a.db").execute("SELECT * FROM alerts").fetchone())
+    assert r["timestamp"] == "2026-10-12T13:50:13" and r["alert_name"] == "Head turned away"
+    assert r["confidence_level"] == "High" and r["duration_s"] == 3.0 and r["review"] is None
+    assert "13:50:13" in r["message"]

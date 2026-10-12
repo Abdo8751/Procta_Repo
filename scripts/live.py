@@ -19,6 +19,7 @@ import cv2
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from procta.alert_log import AlertLog  # noqa: E402
 from procta.camera import open_camera  # noqa: E402
 from procta.config import Config  # noqa: E402
 from procta.detect import Detector  # noqa: E402
@@ -40,12 +41,16 @@ def main():
 
     cfg = Config(imgsz=args.imgsz, det_frame_skip=args.det_skip,
                  det_model=str(ROOT / "models/yolov8n.pt"), pose_model=str(ROOT / "models/yolov8n-pose.pt"))
-    name = f"live_{datetime.now():%Y%m%d_%H%M%S}_{args.mode}"
+    started_at = datetime.now()
+    name = f"live_{started_at:%Y%m%d_%H%M%S}_{args.mode}"
     out = ROOT / "results" / name
     (out / "evidence").mkdir(parents=True, exist_ok=True)
 
     cap = open_camera(args.camera, args.width, args.height)
     show_pose = True
+    ok, first = cap.read()
+    alert_log = AlertLog(ROOT / "results/alerts.db", name, args.mode, started_at, args.camera,
+                         f"{first.shape[1]}x{first.shape[0]}" if ok else "", cfg.to_dict())
     det, sig, pol = Detector(cfg), SignalExtractor(cfg, args.mode), make_policy(args.mode, cfg)
 
     writer, times = None, []
@@ -54,7 +59,9 @@ def main():
     wr.writerow(["track_id", "event_type", "t_alert", "t_start", "confidence", "positive_ratio", "evidence"])
     recent = []          # (until_t, text) banners
     start, prev = time.time(), time.time()
+    alert_log.started_at = datetime.fromtimestamp(start)   # wall clock of t = 0
     print(f"Mode={args.mode}. Sit still ~2 s for seat calibration. 'k' = show/hide pose, 'q' = quit. Output -> {out}")
+    print("Alert log -> results/alerts.db   (view it: python scripts/dashboard.py)")
     try:
         while True:
             ok, frame = cap.read()
@@ -80,6 +87,7 @@ def main():
                 wr.writerow([a.track_id, a.event_type, f"{a.t_alert:.2f}", f"{a.t_start:.2f}",
                              a.confidence, a.positive_ratio, ev_file.name])
                 log.flush()
+                alert_log.add(a, ev_file.relative_to(ROOT / "results").as_posix())
                 conf = "" if a.confidence != a.confidence else f" (confidence {a.confidence:.2f})"
                 msg = a.message(datetime.now().strftime("%H:%M:%S"))
                 recent.append((t + 4, f"track {a.track_id}: {msg}{conf}"))
@@ -106,6 +114,7 @@ def main():
     finally:
         cap.release()
         log.close()
+        alert_log.close()
         if writer is not None:
             writer.release()
             with open(out / f"{name}_times.csv", "w", newline="") as f:
