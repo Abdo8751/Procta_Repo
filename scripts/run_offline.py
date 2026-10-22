@@ -22,7 +22,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from procta.config import Config, EVENT_TYPES  # noqa: E402
+from procta.config import Config, EVENT_TYPES, load_config  # noqa: E402
+from procta.context import ExamContext  # noqa: E402
 from procta.detect import load_detections  # noqa: E402
 from procta.evaluation import evaluate, load_gt, to_markdown  # noqa: E402
 from procta.temporal import MODES, run_policy  # noqa: E402
@@ -82,19 +83,26 @@ def main():
     ap.add_argument("--video", default=None)
     ap.add_argument("--out", default=None)
     ap.add_argument("--tolerance", type=float, default=1.0)
+    ap.add_argument("--context", default=None, help="exam context file (default configs/exam_context.json)")
+    ap.add_argument("--point", default=None, help="observation point id the session was recorded from")
+    ap.add_argument("--thresholds", default=None, help="frozen thresholds JSON (see evaluate_sessions.py)")
     args = ap.parse_args()
 
     meta, frames = load_detections(Path(args.detections))
     session = Path(args.detections).stem
     out = Path(args.out) if args.out else ROOT / "results" / session
     out.mkdir(parents=True, exist_ok=True)
-    cfg = Config()
+    cfg = load_config(args.thresholds)
+    ctx = ExamContext.load(args.context) if args.context else ExamContext.load()
+    point = ctx.point(args.point) if args.point else None
     duration = meta.get("duration_s") or frames[-1]["t"]
 
     report = [f"# Session `{session}`  ({duration / 60:.1f} min, {len(frames)} frames)\n"]
     all_metrics = {}
     for mode in MODES:
-        alerts = run_policy(frames, mode, cfg)
+        alerts, _, sig = run_policy(frames, mode, cfg, context=ctx, point=point, return_events=True)
+        if mode == "context" and sig.suppressed:
+            print(f"  context suppressed: {dict(sig.suppressed)}")
         write_alerts(out / f"alerts_{mode}.csv", alerts)
         print(f"{mode:9s}: {len(alerts)} alerts")
         if args.gt:
@@ -106,7 +114,7 @@ def main():
             files = make_evidence(args.video, frames, alerts, out / "evidence", mode)
             from procta.review import write_review_page
             write_review_page(out / f"review_{mode}.html", alerts, files,
-                              f"PROCTA review - {session} ({mode})", sort_by_confidence=(mode == "improved"))
+                              f"PROCTA review - {session} ({mode})", sort_by_confidence=(mode in ("improved", "context")))
 
     report.append("\nConfig:\n```json\n" + json.dumps(cfg.to_dict(), indent=1) + "\n```\n")
     (out / "metrics.md").write_text("\n".join(report))

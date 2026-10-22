@@ -27,7 +27,9 @@ RESULTS = ROOT / "results"
 DB = RESULTS / "alerts.db"
 CSV_COLS = ["id", "session", "mode", "timestamp", "t_session_s", "track_id", "event_type", "alert_name",
             "message", "confidence", "confidence_level", "positive_ratio", "episode_start_s", "duration_s",
-            "evidence", "review", "reviewed_at"]
+            "evidence", "observation_point", "sightings", "last_seen_s", "clips", "region", "context_note",
+            "review", "reviewed_at"]
+MEDIA = {".jpg": "image/jpeg", ".png": "image/png", ".webp": "image/webp", ".gif": "image/gif", ".mp4": "video/mp4"}
 
 
 def query_alerts(session=None):
@@ -36,6 +38,16 @@ def query_alerts(session=None):
     if session:
         sql, args = sql + " WHERE session=?", (session,)
     rows = [dict(r) for r in con.execute(sql + " ORDER BY timestamp DESC, id DESC", args)]
+    con.close()
+    return rows
+
+
+def query_observations(session=None):
+    con = connect(DB)
+    sql, args = "SELECT * FROM observations", ()
+    if session:
+        sql, args = sql + " WHERE session=?", (session,)
+    rows = [dict(r) for r in con.execute(sql + " ORDER BY timestamp DESC, id DESC LIMIT 200", args)]
     con.close()
     return rows
 
@@ -71,6 +83,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(PAGE, "text/html; charset=utf-8")
         if url.path == "/api/alerts":
             return self._send(json.dumps(query_alerts(q.get("session"))))
+        if url.path == "/api/observations":
+            return self._send(json.dumps(query_observations(q.get("session"))))
         if url.path == "/api/sessions":
             return self._send(json.dumps(query_sessions()))
         if url.path == "/api/export.csv":
@@ -83,8 +97,8 @@ class Handler(BaseHTTPRequestHandler):
                               extra={"Content-Disposition": f'attachment; filename="{name}"'})
         if url.path.startswith("/evidence/"):
             f = (RESULTS / url.path[len("/evidence/"):]).resolve()
-            if RESULTS.resolve() in f.parents and f.suffix.lower() in (".jpg", ".png") and f.is_file():
-                return self._send(f.read_bytes(), "image/jpeg")
+            if RESULTS.resolve() in f.parents and f.suffix.lower() in MEDIA and f.is_file():
+                return self._send(f.read_bytes(), MEDIA[f.suffix.lower()])
             return self._send(b"not found", "text/plain", 404)
         return self._send(b"not found", "text/plain", 404)
 
@@ -139,7 +153,8 @@ button.ok{border-color:var(--ok);color:var(--ok)} button.no{border-color:var(--n
 .tag{padding:2px 8px;border-radius:10px;font-size:12px;border:1px solid currentColor}
 .confirmed{color:var(--ok)} .dismissed{color:var(--no)}
 #modal{position:fixed;inset:0;background:rgba(0,0,0,.8);display:none;align-items:center;justify-content:center;padding:16px}
-#modal img{max-width:100%;max-height:100%} .muted{color:var(--muted)} .empty{padding:24px;text-align:center;color:var(--muted)}
+#modal img,#modal video{max-width:100%;max-height:100%} th.grp{text-align:left;color:var(--text);border-bottom:2px solid var(--line)}
+th.human,td.human{border-left:2px solid var(--accent)} a.clip{margin-right:6px;font-size:12px} .muted{color:var(--muted)} .empty{padding:24px;text-align:center;color:var(--muted)}
 </style></head><body>
 <header><h1>PROCTA alert log</h1>
  <label>Session <select id="session"><option value="">All sessions</option></select></label>
@@ -160,20 +175,25 @@ button.ok{border-color:var(--ok);color:var(--ok)} button.no{border-color:var(--n
  <h2>By alert type</h2>
  <div class="wrap"><table><thead><tr><th>Alert</th><th>Count</th><th>Avg confidence</th><th>Confirmed</th><th>Dismissed</th><th>Not reviewed</th><th>Accuracy</th></tr></thead><tbody id="types"></tbody></table></div>
  <h2>Alerts (newest first)</h2>
- <div class="wrap"><table><thead><tr><th>Time</th><th>Session time</th><th>Alert</th><th>Track</th><th>Confidence</th>
-  <th>Consistency</th><th>Lasted before alert</th><th>Mode</th><th>Evidence</th><th>Review</th></tr></thead><tbody id="rows"></tbody></table></div>
+ <div class="wrap"><table><thead>
+  <tr><th colspan="11" class="grp">Automatic detection (what the system observed)</th><th class="grp human">Invigilator decision</th></tr>
+  <tr><th>Time</th><th>Session time</th><th>Point</th><th>Event</th><th>Track</th><th>Confidence</th>
+  <th>Consistency</th><th>Lasted before alert</th><th>Sightings</th><th>Mode</th><th>Evidence</th><th class="human">Review</th></tr></thead><tbody id="rows"></tbody></table></div>
+ <h2>Robot observation log</h2>
+ <div class="wrap"><table><thead><tr><th>Time</th><th>Session time</th><th>Point</th><th>What happened</th><th>Note</th></tr></thead><tbody id="obs"></tbody></table></div>
 </main>
 <div id="modal" onclick="this.style.display='none'"><img id="big" alt="evidence"></div>
 <script>
-const $=id=>document.getElementById(id); let alerts=[], sessions=[], seen=null, sig='';
+const $=id=>document.getElementById(id); let alerts=[], sessions=[], obs=[], seen=null, sig='';
 const pct=x=>x==null?'–':(100*x).toFixed(0)+'%', num=(x,d=2)=>x==null?'–':x.toFixed(d);
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 async function load(){
  const s=$('session').value;
- const [a,ss]=await Promise.all([fetch('/api/alerts'+(s?'?session='+encodeURIComponent(s):'')).then(r=>r.json()),
-                                 fetch('/api/sessions').then(r=>r.json())]);
- const nsig=JSON.stringify([a.map(x=>[x.id,x.review]),ss.map(x=>[x.session,x.ended_at,x.n_alerts])]);
- if(nsig===sig) return; sig=nsig; alerts=a; sessions=ss; render();
+ const qs=s?'?session='+encodeURIComponent(s):'';
+ const [a,ss,ob]=await Promise.all([fetch('/api/alerts'+qs).then(r=>r.json()),
+                                 fetch('/api/sessions').then(r=>r.json()), fetch('/api/observations'+qs).then(r=>r.json())]);
+ const nsig=JSON.stringify([a.map(x=>[x.id,x.review,x.sightings,x.clips]),ss.map(x=>[x.session,x.ended_at,x.n_alerts]),ob.length]);
+ if(nsig===sig) return; sig=nsig; alerts=a; sessions=ss; obs=ob; render();
 }
 function render(){
  const sel=$('session'), cur=sel.value;
@@ -199,18 +219,24 @@ function render(){
   ||'<tr><td colspan="7" class="empty">No alerts yet</td></tr>';
  const ids=new Set(alerts.map(a=>a.id));
  $('rows').innerHTML=list.map(a=>{const lvl=a.confidence_level, isNew=seen&&!seen.has(a.id);
+  const clips=JSON.parse(a.clips||'[]');
   return `<tr class="${isNew?'new':''}"><td>${esc(a.timestamp.replace('T',' '))}</td><td>${num(a.t_session_s,1)} s</td>
-  <td title="${esc(a.message)}"><b>${esc(a.alert_name)}</b></td><td>${a.track_id}</td>
+  <td>${esc(a.observation_point||'–')}</td>
+  <td title="${esc(a.message)}${a.context_note?'\nContext: '+esc(a.context_note):''}"><b>${esc(a.alert_name)}</b></td><td>${a.track_id}</td>
   <td><span class="bar"><i class="${lvl}" style="width:${(a.confidence??0)*100}%"></i></span><span class="${lvl}">${num(a.confidence)} ${lvl}</span></td>
-  <td>${pct(a.positive_ratio)}</td><td>${num(a.duration_s,1)} s</td><td>${esc(a.mode)}</td>
-  <td>${a.evidence?`<img class="thumb" loading="lazy" src="/evidence/${encodeURI(a.evidence)}" onclick="zoom(this.src)" alt="evidence">`:'<span class="muted">none</span>'}</td>
-  <td>${a.review?`<span class="tag ${a.review}">${a.review}</span> <button onclick="review(${a.id},null)">undo</button>`
+  <td>${pct(a.positive_ratio)}</td><td>${num(a.duration_s,1)} s</td><td>${a.sightings??1}${(a.sightings??1)>1?' (consolidated)':''}</td><td>${esc(a.mode)}</td>
+  <td>${a.evidence?`<img class="thumb" loading="lazy" src="/evidence/${encodeURI(a.evidence)}" onclick="zoom(this.src)" alt="evidence">`:'<span class="muted">none</span>'}
+   ${clips.map((c,i)=>`<a class="clip" href="#" onclick="zoom('/evidence/${encodeURI(c)}');return false">clip ${i+1}</a>`).join('')}</td>
+  <td class="human">${a.review?`<span class="tag ${a.review}">${a.review}</span> <button onclick="review(${a.id},null)">undo</button>`
    :`<button class="ok" onclick="review(${a.id},'confirmed')">Confirm</button> <button class="no" onclick="review(${a.id},'dismissed')">Dismiss</button>`}</td></tr>`}).join('')
-  ||'<tr><td colspan="10" class="empty">No alerts yet &mdash; run python scripts/live.py</td></tr>';
+  ||'<tr><td colspan="12" class="empty">No alerts yet &mdash; run python scripts/live.py</td></tr>';
+ const kinds={arrive:'Arrived at point',leave:'Left point',insufficient_view:'Insufficient view - asked to move'};
+ $('obs').innerHTML=obs.map(o=>`<tr><td>${esc(o.timestamp.replace('T',' '))}</td><td>${num(o.t_session_s,1)} s</td><td>${esc(o.point)}</td><td>${esc(kinds[o.kind]||o.kind)}</td><td class="muted">${esc(o.note)}</td></tr>`).join('')
+  ||'<tr><td colspan="5" class="empty">No robot observations yet</td></tr>';
  seen=ids;
 }
 async function review(id,r){await fetch('/api/review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,review:r})}); await load();}
-function zoom(src){$('big').src=src; $('modal').style.display='flex';}
+function zoom(src){$('big').src=src+(src.endsWith('.webp')||src.endsWith('.gif')?'?'+Date.now():''); $('modal').style.display='flex';}
 $('session').onchange=()=>{sig='';seen=null;load()}; $('type').onchange=render;
 load(); setInterval(load,2000);
 </script></body></html>"""

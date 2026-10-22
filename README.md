@@ -15,37 +15,48 @@ python -m pytest -q                                     # 13 tests
 ```
 YOLOv8 weights download automatically on first run (or put them in `models/`).
 
-## Workflow
+## Workflow (week 5: robot route, evidence clips, exam context)
 ```bash
-# 1. Record a staged session that follows the timed protocol (ground truth by design)
-python scripts/record_session.py --name s01_daylight
+# 0. Describe the mock exam and the robot's observation route
+#    configs/exam_context.json  (permitted devices, neighbour side / clock side per point, ignore zones)
+#    docs/annotation_guide.md   (event definitions, lookalikes, room set-up, recording plan)
 
-# 2. Check / correct the ground truth on the video
-python scripts/label_video.py --video data/videos/s01_daylight.mp4
+# 1. Live demo - the camera plays the robot's camera; n/p = move to next/previous observation point
+python scripts/live.py --mode context --auto-route        # proposed: temporal + consolidation + context
+python scripts/live.py --mode improved                    # temporal + consolidation, no context
+python scripts/live.py --mode frame                       # B0 frame-level baseline
+python scripts/dashboard.py                               # review page: http://localhost:8765
 
-# 3. Run the detectors once, cache detections
-python scripts/extract_detections.py --video data/videos/s01_daylight.mp4
+# 2. Record staged sessions (solo protocol: phone + viewing neighbour's paper, with lookalikes)
+python scripts/record_session.py --name s01               # uses docs/protocol_v2_solo.csv
+python scripts/label_video.py --video data/videos/s01.mp4
+python scripts/extract_detections.py --video data/videos/s01.mp4
 
-# 4. Frame-level (B0) vs 3-s persistence (B1) vs improved: alerts, metrics, evidence, review pages
-python scripts/run_offline.py --detections data/detections/s01_daylight.jsonl \
-    --gt data/labels/s01_daylight_gt.csv --video data/videos/s01_daylight.mp4
-#    -> results/s01_daylight/metrics.md, review_improved.html
+# 3. One session, all four methods
+python scripts/run_offline.py --detections data/detections/s01.jsonl --gt data/labels/s01_gt.csv --point A
 
-# Live demo: --mode frame | baseline (= original script) | improved
-python scripts/live.py --mode improved
+# 4. All sessions, dev/test split (data/splits.csv), thresholds frozen before testing
+python scripts/evaluate_sessions.py --set dev
+python scripts/evaluate_sessions.py --freeze configs/thresholds_frozen.json
+python scripts/evaluate_sessions.py --set test --thresholds configs/thresholds_frozen.json
 
-# Alert log + dashboard: every live alert (time, alert name, confidence, consistency, evidence)
-# goes into results/alerts.db; review alerts and see accuracy (confirmed / reviewed) at
-python scripts/dashboard.py        # -> http://localhost:8765, 'Download CSV' for Excel
+# Replay any recording as if live (demo with a different input)
+python scripts/live.py --mode context --video data/videos/s04.mp4
 ```
-Other: `scripts/simulate_detector_noise.py` (controlled detector-flicker experiment),
-`scripts/analyze_live_log.py` (stats on the original live log).
+
+Methods compared on identical detections: **B0** frame-level (`frame`), **B1** 3-s rule (`baseline`),
+**temporal confirmation + consolidation** (`improved`), **+ examination context** (`context`, the focused
+improvement). Every confirmed event is one record with timestamp, observation point, image region, a still,
+one evidence clip per sighting (animated WebP + MP4) and the invigilator's Confirm / Dismiss decision.
 
 ## Layout
 ```
-procta/       config, detect (YOLO), signals (per-frame events), temporal (baseline + improved alerting),
+procta/       config, detect (YOLO), signals (per-frame events), temporal (B0/B1/temporal alerting), events (consolidation),
+              context (exam rules + route), clips (rolling-buffer evidence clips), alert_log (SQLite),
               evaluation (event-level P/R/false alarms/latency), review (proctor review page), draw
-scripts/      record_session, label_video, extract_detections, run_offline, live, simulate_detector_noise, analyze_live_log
+scripts/      live, dashboard, record_session, label_video, extract_detections, run_offline, evaluate_sessions,
+              simulate_detector_noise, analyze_live_log
+configs/      exam_context.json (rules + observation route), thresholds_frozen.json (after --freeze)
 docs/         event definitions, recording protocol, week-2 report
 data/labels/  ground truth CSVs (videos are git-ignored)
 results/      metrics and simulation outputs

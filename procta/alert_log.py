@@ -33,7 +33,14 @@ CREATE TABLE IF NOT EXISTS alerts (
     confidence REAL, confidence_level TEXT, positive_ratio REAL, episode_start_s REAL,
     duration_s REAL, evidence TEXT, review TEXT, reviewed_at TEXT);
 CREATE INDEX IF NOT EXISTS alerts_session ON alerts(session);
+CREATE TABLE IF NOT EXISTS observations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, session TEXT, timestamp TEXT, t_session_s REAL,
+    point TEXT, kind TEXT, note TEXT);
 """
+
+# Columns added in week 5 (robot route, consolidation, clips). Old databases are migrated on open.
+NEW_ALERT_COLUMNS = {"observation_point": "TEXT", "sightings": "INTEGER DEFAULT 1", "last_seen_s": "REAL",
+                     "clips": "TEXT", "region": "TEXT", "context_note": "TEXT"}
 
 
 def confidence_level(conf):
@@ -47,6 +54,11 @@ def connect(db_path):
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA journal_mode=WAL")      # dashboard can read while live.py writes
     con.executescript(SCHEMA)
+    have = {r[1] for r in con.execute("PRAGMA table_info(alerts)")}
+    for col, typ in NEW_ALERT_COLUMNS.items():
+        if col not in have:
+            con.execute(f"ALTER TABLE alerts ADD COLUMN {col} {typ}")
+    con.commit()
     return con
 
 
@@ -58,20 +70,46 @@ class AlertLog:
                              (session, mode, started_at.isoformat(timespec="seconds"), None, camera,
                               resolution, json.dumps(config or {})))
 
-    def add(self, alert, evidence=""):
-        """alert: temporal.Alert. evidence: image path relative to results/."""
+    def add(self, alert, evidence="", point=None, region=None, clip=None, context_note=None):
+        """alert: temporal.Alert. evidence / clip: paths relative to results/. Returns the row id."""
         conf = None if alert.confidence != alert.confidence else float(alert.confidence)
         ratio = None if alert.positive_ratio != alert.positive_ratio else float(alert.positive_ratio)
         ts = self.started_at + timedelta(seconds=alert.t_alert)
         with self.con:
-            self.con.execute(
+            cur = self.con.execute(
                 "INSERT INTO alerts (session, mode, timestamp, t_session_s, track_id, event_type, alert_name,"
-                " message, confidence, confidence_level, positive_ratio, episode_start_s, duration_s, evidence)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " message, confidence, confidence_level, positive_ratio, episode_start_s, duration_s, evidence,"
+                " observation_point, sightings, last_seen_s, clips, region, context_note)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (self.session, self.mode, ts.isoformat(timespec="seconds"), round(alert.t_alert, 2),
                  int(alert.track_id), alert.event_type, EVENT_NAMES.get(alert.event_type, alert.event_type),
                  alert.message(ts.strftime("%H:%M:%S")), conf, confidence_level(conf), ratio,
-                 round(alert.t_start, 2), round(alert.t_alert - alert.t_start, 2), evidence))
+                 round(alert.t_start, 2), round(alert.t_alert - alert.t_start, 2), evidence,
+                 point, 1, round(alert.t_alert, 2), json.dumps([clip] if clip else []),
+                 json.dumps(region) if region else None, context_note))
+        return cur.lastrowid
+
+    def update_event(self, row_id, sightings=None, last_seen_s=None, add_clip=None):
+        """A repeated sighting was consolidated into this record."""
+        with self.con:
+            row = self.con.execute("SELECT sightings, last_seen_s, clips FROM alerts WHERE id=?", (row_id,)).fetchone()
+            if row is None:
+                return
+            clips = json.loads(row["clips"] or "[]")
+            if add_clip and add_clip not in clips:
+                clips.append(add_clip)
+            self.con.execute("UPDATE alerts SET sightings=?, last_seen_s=?, clips=? WHERE id=?",
+                             (sightings if sightings is not None else row["sightings"],
+                              round(last_seen_s, 2) if last_seen_s is not None else row["last_seen_s"],
+                              json.dumps(clips), row_id))
+
+    def observe(self, t_session, point, kind, note=""):
+        """Robot observation log: arrival at a point, insufficient view, leaving a point."""
+        ts = self.started_at + timedelta(seconds=t_session)
+        with self.con:
+            self.con.execute("INSERT INTO observations (session, timestamp, t_session_s, point, kind, note)"
+                             " VALUES (?,?,?,?,?,?)",
+                             (self.session, ts.isoformat(timespec="seconds"), round(t_session, 2), point, kind, note))
 
     def close(self):
         with self.con:

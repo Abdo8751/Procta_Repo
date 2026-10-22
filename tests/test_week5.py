@@ -1,0 +1,129 @@
+"""Tests for the week-5 additions: exam context, consolidation, clips, robot observation log."""
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from procta.config import Config  # noqa: E402
+from procta.context import ExamContext, ObservationPoint, in_zone  # noqa: E402
+from procta.events import EventConsolidator  # noqa: E402
+from procta.signals import SignalExtractor  # noqa: E402
+from procta.temporal import Alert, run_policy  # noqa: E402
+from test_core import _face_person, _person  # noqa: E402
+
+FPS = 10
+
+
+def _ctx(neighbour="left", allowed=("right",), zones=(), devices=()):
+    pt = ObservationPoint("A", neighbour_side=neighbour, allowed_look_sides=list(allowed), ignore_zones=list(zones))
+    return ExamContext(permitted_devices=list(devices), observation_points=[pt]), pt
+
+
+def _head_frames(cfg, dx, n):
+    return [_face_person(1, 0)] * cfg.calibration_frames + [_face_person(1, dx)] * n
+
+
+def test_default_context_file_loads():
+    ctx = ExamContext.load()
+    assert len(ctx.observation_points) >= 1 and "cell phone" not in ctx.permitted_devices
+
+
+def test_context_keeps_neighbour_turn_drops_clock_turn():
+    cfg = Config()
+    ctx, pt = _ctx(neighbour="left", allowed=("right",))
+    for dx, expect in ((-16, True), (16, False)):          # nose to image left = towards neighbour
+        sig = SignalExtractor(cfg, "context", context=ctx, point=pt)
+        out = [sig({"t": i / FPS, "persons": [p], "phones": []}) for i, p in enumerate(_head_frames(cfg, dx, 5))]
+        assert ((1, "head_turned") in out[-1]) is expect
+    imp = SignalExtractor(cfg, "improved")                 # without context every turn counts
+    out = [imp({"t": i / FPS, "persons": [p], "phones": []}) for i, p in enumerate(_head_frames(cfg, 16, 5))]
+    assert (1, "head_turned") in out[-1]
+
+
+def test_context_ignore_zone_and_permitted_device():
+    person = _person(1, [0, 0, 200, 400], (150, 300))
+    phone = {"box": [140, 290, 170, 330], "conf": 0.7}
+    frame = {"t": 0.0, "wh": [640, 480], "persons": [person], "phones": [phone]}
+    ctx, pt = _ctx(zones=[[0.0, 0.5, 0.5, 1.0]])           # phone centre (0.24, 0.64) is inside
+    assert SignalExtractor(Config(), "context", context=ctx, point=pt)(frame) == {}
+    ctx2, pt2 = _ctx(devices=["cell phone"])
+    sig = SignalExtractor(Config(), "context", context=ctx2, point=pt2)
+    assert sig(frame) == {} and sig.suppressed["phone permitted by exam rules"] == 1
+    assert in_zone([0, 0, 10, 10], [], [640, 480]) is False
+
+
+def test_consolidation_merges_repeats_within_window():
+    c = EventConsolidator(window_s=30)
+    e1, new1 = c.on_alert(Alert(1, "phone_in_hand", 13, 10, 0.8, 1.0), "A")
+    c.on_episode_end((1, "phone_in_hand"), 18, "A")
+    e2, new2 = c.on_alert(Alert(7, "phone_in_hand", 26, 23, 0.9, 1.0), "A")   # new track id, 5 s later
+    e3, new3 = c.on_alert(Alert(7, "phone_in_hand", 90, 87, 0.9, 1.0), "A")   # 60 s later -> new event
+    e4, new4 = c.on_alert(Alert(7, "phone_in_hand", 95, 92, 0.9, 1.0), "B")   # other point -> new event
+    assert new1 and not new2 and e2 is e1 and e1.sightings == 2 and e1.track_ids == {1, 7}
+    assert new3 and new4 and len(c.events) == 3 and e1.confidence == 0.9
+
+
+def _phone_frames(pattern):
+    """pattern of 0/1 per frame: phone in the right hand or no phone."""
+    person = _person(1, [0, 0, 200, 400], (150, 300))
+    phone = {"box": [140, 290, 170, 330], "conf": 0.7}
+    return [{"t": i / FPS, "persons": [person], "phones": [phone] if on else []} for i, on in enumerate(pattern)]
+
+
+def test_repeated_sighting_is_one_record_in_temporal_modes_two_in_b1():
+    pat = [0] * 40 + [1] * 60 + [0] * 50 + [1] * 60 + [0] * 30          # 6 s, 5 s away, 6 s
+    frames = _phone_frames(pat)
+    cfg = Config()
+    b1 = [a for a in run_policy(frames, "baseline", cfg) if a.event_type == "phone_in_hand"]
+    imp, events, _ = run_policy(frames, "improved", cfg, return_events=True)
+    imp = [a for a in imp if a.event_type == "phone_in_hand"]
+    assert len(b1) == 2 and len(imp) == 1
+    ev = next(e for e in events if e.event_type == "phone_in_hand")
+    assert ev.sightings == 2
+
+
+def test_aggregate_sums_sessions():
+    from procta.evaluation import aggregate, evaluate
+    gt = [{"event_type": "phone_in_hand", "start_s": 10, "end_s": 20}]
+    r1 = evaluate([{"event_type": "phone_in_hand", "t_alert": 13}], gt, 1800, 3.0, 1.0, ["phone_in_hand"])
+    r2 = evaluate([{"event_type": "phone_in_hand", "t_alert": 50}], gt, 1800, 3.0, 1.0, ["phone_in_hand"])
+    a = aggregate([r1, r2], [1800, 1800])["phone_in_hand"]
+    assert a["alerts"] == 2 and a["detected"] == 1 and a["target_episodes"] == 2
+    assert a["false_alerts_per_hour"] == 1.0 and a["recall"] == 0.5
+
+
+def test_alert_log_consolidation_and_observations(tmp_path):
+    import json
+    from datetime import datetime
+    from procta.alert_log import AlertLog, connect
+    log = AlertLog(tmp_path / "a.db", "live_x", "context", datetime(2026, 10, 22, 10, 0, 0))
+    rid = log.add(Alert(1, "phone_in_hand", 13.0, 10.0, 0.8, 1.0), "e.jpg", "A", [0, 0, 10, 10], "c1.webp")
+    log.update_event(rid, 2, 30.0, "c2.webp")
+    log.observe(40.0, "A", "insufficient_view", "next permitted point B")
+    log.close()
+    con = connect(tmp_path / "a.db")
+    r = dict(con.execute("SELECT * FROM alerts").fetchone())
+    assert r["sightings"] == 2 and json.loads(r["clips"]) == ["c1.webp", "c2.webp"] and r["observation_point"] == "A"
+    o = dict(con.execute("SELECT * FROM observations").fetchone())
+    assert o["kind"] == "insufficient_view" and o["timestamp"] == "2026-10-22T10:00:40"
+
+
+def test_clip_recorder_writes_preroll_clip(tmp_path):
+    import numpy as np
+    from procta.clips import ClipRecorder
+    rec = ClipRecorder(tmp_path, pre_s=3, post_s=0.5, fps=5, width=64)
+    for i in range(50):                        # 10 s at 5 fps
+        t = i / 5
+        rec.push(t, np.full((48, 64, 3), i * 5 % 255, np.uint8))
+        if t == 4.0:
+            rec.start("ev001_s1", t_from=2.0)  # confirmed at 4 s, behaviour started at 2 s
+        if t == 6.0:
+            rec.stop("ev001_s1", 6.0)
+    rec.join()
+    assert (tmp_path / "ev001_s1.mp4").exists()
+    assert (tmp_path / "ev001_s1.webp").exists() or (tmp_path / "ev001_s1.gif").exists()
+    import cv2
+    n = int(cv2.VideoCapture(str(tmp_path / "ev001_s1.mp4")).get(cv2.CAP_PROP_FRAME_COUNT))
+    assert 25 <= n <= 30                        # from 1 s before the start (t=1.0) to stop + 0.5 s (t=6.5)

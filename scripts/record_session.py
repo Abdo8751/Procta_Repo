@@ -35,7 +35,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--name", required=True)
     ap.add_argument("--camera", type=int, default=0)
-    ap.add_argument("--protocol", default=str(ROOT / "docs/protocol_v1.csv"))
+    ap.add_argument("--protocol", default=str(ROOT / "docs/protocol_v2_solo.csv"))
     ap.add_argument("--width", type=int, default=1280)
     ap.add_argument("--height", type=int, default=720)
     args = ap.parse_args()

@@ -42,3 +42,13 @@ class Config:
 
     def to_dict(self):
         return asdict(self)
+
+
+def load_config(path=None) -> Config:
+    """Config with thresholds from a frozen JSON file (keys = Config fields), or defaults."""
+    import json
+    from pathlib import Path
+    if not path:
+        return Config()
+    raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    return Config(**{k: v for k, v in raw.items() if k in Config.__dataclass_fields__})

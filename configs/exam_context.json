@@ -1,0 +1,45 @@
+{
+  "exam": "PROCTA mock quiz v1 (staged, ungraded)",
+  "notes": "Rules for this mock exam. Used only by --mode context; the other modes ignore it. Sides are IMAGE sides as the camera sees them: 'right' means the student's nose moves towards the right edge of the camera image (check with the yaw readout in live.py: positive yaw = image right).",
+
+  "permitted_devices": ["calculator"],
+  "permitted_materials": ["question sheet", "one A4 formula sheet"],
+  "authorised_interactions": ["handing the paper to the invigilator", "raising a hand to ask the invigilator"],
+
+  "seats": [
+    {"id": "S1", "participant": "P01", "neighbour_desk": "S2 (empty desk with an answer sheet)"}
+  ],
+
+  "insufficient_view_s": 4.0,
+  "consolidation_window_s": 30.0,
+
+  "observation_points": [
+    {
+      "id": "A",
+      "name": "Front of desk, slightly left",
+      "dwell_s": 120,
+      "neighbour_side": "left",
+      "allowed_look_sides": ["right"],
+      "allowed_look_reason": "wall clock and invigilator are on the image right",
+      "ignore_zones": []
+    },
+    {
+      "id": "B",
+      "name": "Side view from the aisle",
+      "dwell_s": 120,
+      "neighbour_side": "right",
+      "allowed_look_sides": ["left"],
+      "allowed_look_reason": "invigilator desk is on the image left",
+      "ignore_zones": [[0.0, 0.0, 0.2, 0.5]]
+    },
+    {
+      "id": "C",
+      "name": "Front-right, elevated",
+      "dwell_s": 120,
+      "neighbour_side": "left",
+      "allowed_look_sides": ["right"],
+      "allowed_look_reason": "wall clock on the image right",
+      "ignore_zones": []
+    }
+  ]
+}

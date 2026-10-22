@@ -58,7 +58,8 @@ class Detector:
                     "kps": [[round(float(x), 1), round(float(y), 1), round(float(c), 3)]
                             for (x, y), c in zip(kxy[i], kconf[i])],
                 })
-        return {"t": round(t, 4), "persons": persons, "phones": list(self._cached_phones)}
+        h, w = frame.shape[:2]
+        return {"t": round(t, 4), "wh": [w, h], "persons": persons, "phones": list(self._cached_phones)}
 
 
 def save_detections(path: Path, meta: dict, frames: list):

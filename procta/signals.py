@@ -20,10 +20,11 @@ to one side). In profile one eye disappears, which also counts as turned. Lookin
 down is deliberately not an event: it is normal when writing on paper.
 """
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 import numpy as np
 
+from .context import in_zone
 from .config import (Config, LEFT_EYE, LEFT_SHOULDER, LEFT_WRIST, NOSE, RIGHT_EYE, RIGHT_SHOULDER,
                      RIGHT_WRIST)
 
@@ -61,15 +62,33 @@ def assign_phone_owners(phones, persons, max_dist_factor=0.5):
 
 
 class SignalExtractor:
-    def __init__(self, cfg: Config, mode: str = "improved"):
-        assert mode in ("baseline", "improved")
-        self.cfg, self.mode = cfg, mode
+    def __init__(self, cfg: Config, mode: str = "improved", context=None, point=None):
+        """mode: "baseline" (original rules), "improved" (owner assignment + keypoint gating),
+        "context" (= improved + examination context: permitted devices, ignore zones,
+        head turns only towards the neighbour's desk). context: procta.context.ExamContext."""
+        assert mode in ("baseline", "improved", "context")
+        if mode == "context" and context is None:
+            from .context import ExamContext
+            context = ExamContext.load()
+        self.cfg, self.mode, self.context = cfg, mode, context
+        self.point = point if point is not None else (context.observation_points[0] if context else None)
+        self.suppressed = Counter()             # context mode: observations dropped, by reason
         self.prev_shoulder = {}                 # track -> (xy, t)
         self.seat_samples = defaultdict(list)
         self.seat_baseline = {}
         self.head_samples = defaultdict(list)
         self.head_baseline = {}
         self.head_yaw = {}                      # track -> latest yaw offset (for the live overlay)
+
+    def set_point(self, point):
+        """New observation point = new viewpoint: re-calibrate seat and head pose."""
+        self.point = point
+        self.prev_shoulder.clear()
+        self.seat_samples.clear()
+        self.seat_baseline.clear()
+        self.head_samples.clear()
+        self.head_baseline.clear()
+        self.head_yaw.clear()
 
     def _kp(self, person, idx):
         x, y, c = person["kps"][idx]
@@ -102,8 +121,20 @@ class SignalExtractor:
         persons, phones = frame["persons"], frame["phones"]
         out = {}
 
+        ctx = self.context if self.mode == "context" else None
+        if ctx is not None:
+            kept = []
+            for ph in phones:
+                if ctx.device_permitted("cell phone"):
+                    self.suppressed["phone permitted by exam rules"] += 1
+                elif self.point is not None and in_zone(ph["box"], self.point.ignore_zones, frame.get("wh")):
+                    self.suppressed["phone in ignore zone (e.g. invigilator desk)"] += 1
+                else:
+                    kept.append(ph)
+            phones = kept
+
         owners = (assign_phone_owners(phones, persons)
-                  if self.mode == "improved" and cfg.assign_phone_to_owner else None)
+                  if self.mode in ("improved", "context") and cfg.assign_phone_to_owner else None)
 
         for j, pe in enumerate(persons):
             tid = pe["id"]
@@ -155,5 +186,15 @@ class SignalExtractor:
                 off = yaw[0] - self.head_baseline[tid]
                 self.head_yaw[tid] = off
                 if abs(off) > cfg.head_yaw_thr:
-                    out[(tid, "head_turned")] = yaw[1]
+                    side = "right" if off > 0 else "left"          # image side the nose moved to
+                    reason = None
+                    if ctx is not None and self.point is not None:
+                        if side in self.point.allowed_look_sides:
+                            reason = f"head turn to allowed side ({side})"
+                        elif self.point.neighbour_side and side != self.point.neighbour_side:
+                            reason = f"head turn away from neighbour ({side})"
+                    if reason:
+                        self.suppressed[reason] += 1
+                    else:
+                        out[(tid, "head_turned")] = yaw[1]
         return out

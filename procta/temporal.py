@@ -82,9 +82,21 @@ class ConfidenceAwareAlerter:
     def __init__(self, cfg: Config):
         self.cfg = cfg
         self.eps = {}
+        self.closed = []        # episodes that ended in the last step: (key, start, last_on, alerted)
+
+    def flush(self):
+        """End every open episode (e.g. the robot leaves this observation point)."""
+        self.closed = [(k, ep.start, ep.last_on, ep.alerted) for k, ep in self.eps.items()]
+        self.eps = {}
+        return self.closed
+
+    def last_seen(self, key):
+        ep = self.eps.get(key)
+        return ep.last_on if ep else None
 
     def step(self, t: float, signals: dict, present_tracks: set = None):
         cfg, alerts = self.cfg, []
+        self.closed = []
         for key, conf in signals.items():
             ep = self.eps.get(key)
             if ep is None:
@@ -103,6 +115,7 @@ class ConfidenceAwareAlerter:
             if key not in signals:
                 ep.last_t = t                  # off time is not credited to on_time
                 if t - ep.last_on > cfg.gap_tolerance_s:
+                    self.closed.append((key, ep.start, ep.last_on, ep.alerted))
                     del self.eps[key]          # episode over
                 continue
             dur = t - ep.start
@@ -129,21 +142,45 @@ class FrameLevelAlerter:
         return alerts
 
 
-MODES = ("frame", "baseline", "improved")   # B0 frame-level, B1 3-s persistence, proposed
+# B0 frame-level, B1 3-s persistence, temporal confirmation + consolidation,
+# temporal confirmation + consolidation + examination context (the focused improvement)
+MODES = ("frame", "baseline", "improved", "context")
 
 
 def make_policy(mode: str, cfg: Config):
     return {"frame": FrameLevelAlerter, "baseline": BaselinePersistence,
-            "improved": ConfidenceAwareAlerter}[mode](cfg)
+            "improved": ConfidenceAwareAlerter, "context": ConfidenceAwareAlerter}[mode](cfg)
 
 
-def run_policy(frames, mode: str, cfg: Config):
-    """Replay cached detections through signals + temporal policy -> list[Alert]."""
+def signal_mode(mode: str) -> str:
+    return {"frame": "baseline", "baseline": "baseline", "improved": "improved", "context": "context"}[mode]
+
+
+def run_policy(frames, mode: str, cfg: Config, context=None, point=None, return_events=False):
+    """Replay cached detections through signals + temporal policy (+ consolidation for the
+    temporal modes) -> list[Alert] (one per reviewable record). return_events=True also
+    returns the consolidated events and the signal extractor (for suppression counts)."""
+    from .events import EventConsolidator
     from .signals import SignalExtractor
-    sig = SignalExtractor(cfg, "improved" if mode == "improved" else "baseline")
+    sig = SignalExtractor(cfg, signal_mode(mode), context=context, point=point)
     pol = make_policy(mode, cfg)
+    window = context.consolidation_window_s if context is not None else 30.0
+    cons = EventConsolidator(window) if mode in ("improved", "context") else None
+    pid = sig.point.id if sig.point is not None else "A"
     alerts = []
     for fr in frames:
         s = sig(fr)
-        alerts += pol.step(fr["t"], s, {p["id"] for p in fr["persons"]})
+        new = pol.step(fr["t"], s, {p["id"] for p in fr["persons"]})
+        if cons is None:
+            alerts += new
+            continue
+        for a in new:
+            ev, is_new = cons.on_alert(a, pid)
+            if is_new:
+                alerts.append(a)
+        for key, start, last_on, alerted in pol.closed:
+            if alerted:
+                cons.on_episode_end(key, last_on, pid)
+    if return_events:
+        return alerts, (cons.events if cons else []), sig
     return alerts

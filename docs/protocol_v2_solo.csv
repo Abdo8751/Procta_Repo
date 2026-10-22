@@ -1,0 +1,26 @@
+start_s,end_s,event_type,instruction
+0,20,none,Sit still facing your paper and write (calibration)
+20,35,phone_in_hand,PHONE: take the phone out and use it in your hand
+35,50,none,Put the phone away and write
+50,52,lookalike_phone_glance,Glance at the phone for ~2 s only (should NOT alert)
+52,65,none,Write
+65,80,lookalike_calculator,Use the CALCULATOR in your hand (permitted - should NOT alert)
+80,95,none,Put the calculator down and write
+95,110,phone_in_hand,PHONE held low at the desk edge and partly covered by your hand (occluded)
+110,125,none,Put the phone away and write
+125,146,phone_in_hand,REPEAT: phone in hand 8 s - put it down 5 s - phone in hand again 8 s (should become ONE event)
+146,165,none,Write
+165,175,head_turned,Turn your head towards the NEIGHBOUR desk and hold it
+175,190,none,Face your paper and write
+190,198,lookalike_clock,Look at the CLOCK and hold it (permitted point of interest)
+198,210,none,Write
+210,212,lookalike_neighbour_glance,Quick ~2 s glance at the neighbour desk (should NOT alert)
+212,225,none,Write
+225,241,head_turned,REPEAT: look at the NEIGHBOUR desk 6 s - face your paper 4 s - neighbour desk again 6 s (ONE event)
+241,255,none,Write
+255,265,lookalike_invigilator,Raise your hand and look towards the INVIGILATOR (authorised interaction)
+265,280,none,Write
+280,290,insufficient_view,Turn your back to the camera or lean out of view (robot should report insufficient view)
+290,310,none,Sit back and write
+310,320,head_turned,Look at the NEIGHBOUR desk while covering part of your face with your hand (occluded)
+320,340,none,Write normally until the end

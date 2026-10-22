@@ -73,6 +73,8 @@ def evaluate(alerts, gt, duration_s, persistence_s=3.0, tolerance_s=1.0, event_t
             "recall": detected / len(targets) if targets else float("nan"),
             "missed_event_rate": 1 - detected / len(targets) if targets else float("nan"),
             "false_alarms_per_min": n_false / (duration_s / 60.0),
+            "false_alerts_per_hour": n_false / (duration_s / 3600.0),
+            "duplicate_alerts": n_true - detected,
             "mean_latency_s": st.mean(lat) if lat else float("nan"),
             "alerts_per_episode": n_true / detected if detected else float("nan"),
         }
@@ -84,6 +86,8 @@ def evaluate(alerts, gt, duration_s, persistence_s=3.0, tolerance_s=1.0, event_t
         "recall": tot["detected"] / tot["target_episodes"] if tot["target_episodes"] else float("nan"),
         "missed_event_rate": (1 - tot["detected"] / tot["target_episodes"]) if tot["target_episodes"] else float("nan"),
         "false_alarms_per_min": tot["false_alerts"] / (duration_s / 60.0),
+        "false_alerts_per_hour": tot["false_alerts"] / (duration_s / 3600.0),
+        "duplicate_alerts": int(tot["true_alerts"] - tot["detected"]),
         "mean_latency_s": st.mean(all_lat) if all_lat else float("nan"),
         "alerts_per_episode": tot["true_alerts"] / tot["detected"] if tot["detected"] else float("nan"),
     }
@@ -91,7 +95,32 @@ def evaluate(alerts, gt, duration_s, persistence_s=3.0, tolerance_s=1.0, event_t
 
 
 COLS = ["alerts", "target_episodes", "detected", "precision", "recall", "missed_event_rate",
-        "false_alarms_per_min", "mean_latency_s", "alerts_per_episode"]
+        "false_alerts_per_hour", "duplicate_alerts", "mean_latency_s", "alerts_per_episode"]
+
+
+def aggregate(results_list, durations):
+    """Combine per-session results (from evaluate) into one result over all sessions:
+    counts are summed, rates recomputed, latency averaged over detected episodes."""
+    total_s = sum(durations)
+    types = sorted({ev for r in results_list for ev in r if ev != "ALL"}) + ["ALL"]
+    out = {}
+    for ev in types:
+        c = {k: sum(r.get(ev, {}).get(k, 0) for r in results_list)
+             for k in ("alerts", "true_alerts", "false_alerts", "target_episodes", "detected")}
+        lat_w = [(r[ev]["mean_latency_s"], r[ev]["detected"]) for r in results_list
+                 if ev in r and r[ev]["detected"] and r[ev]["mean_latency_s"] == r[ev]["mean_latency_s"]]
+        out[ev] = {
+            **c,
+            "precision": c["true_alerts"] / c["alerts"] if c["alerts"] else float("nan"),
+            "recall": c["detected"] / c["target_episodes"] if c["target_episodes"] else float("nan"),
+            "missed_event_rate": 1 - c["detected"] / c["target_episodes"] if c["target_episodes"] else float("nan"),
+            "false_alarms_per_min": c["false_alerts"] / (total_s / 60.0),
+            "false_alerts_per_hour": c["false_alerts"] / (total_s / 3600.0),
+            "duplicate_alerts": c["true_alerts"] - c["detected"],
+            "mean_latency_s": (sum(l * n for l, n in lat_w) / sum(n for _, n in lat_w)) if lat_w else float("nan"),
+            "alerts_per_episode": c["true_alerts"] / c["detected"] if c["detected"] else float("nan"),
+        }
+    return out
 
 
 def to_markdown(results: dict, title=""):
