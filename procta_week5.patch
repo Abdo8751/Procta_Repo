@@ -1,0 +1,1647 @@
+From 4dee18f6eeed51937cacb59487745e540d4214ee Mon Sep 17 00:00:00 2001
+From: Abdo <abdelrahman.mohomed@student.giu-uni.de>
+Date: Thu, 22 Oct 2026 18:03:11 +0300
+Subject: [PATCH] Robot observation route, evidence clips, event consolidation
+ and exam context
+
+- configs/exam_context.json + procta/context.py: permitted devices, neighbour / allowed look
+  sides and ignore zones per observation point; new --mode context (temporal + context)
+- procta/events.py: repeated sightings within 30 s at the same point become one event
+- procta/clips.py: rolling-buffer evidence clips (WebP + MP4) starting before the behaviour
+- live.py: observation points (n/p, --auto-route), insufficient-view log, live temporal
+  decision bars, --video replay; alert log stores point, region, sightings, clips
+- dashboard: clips, sightings, robot observation log, detection vs invigilator decision
+- evaluation: false alerts per hour, duplicate alerts, multi-session dev/test evaluation
+  with frozen thresholds (scripts/evaluate_sessions.py)
+- docs: annotation guide, solo recording protocol v2
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_0121KLk9HJsc3WvYyJ73aeSN
+---
+ README.md                    |  51 ++++----
+ configs/exam_context.json    |  45 +++++++
+ data/splits.csv              |   7 ++
+ docs/annotation_guide.md     |  61 ++++++++++
+ docs/protocol_v2_solo.csv    |  26 +++++
+ procta/alert_log.py          |  50 +++++++-
+ procta/clips.py              |  96 +++++++++++++++
+ procta/config.py             |  10 ++
+ procta/context.py            |  63 ++++++++++
+ procta/detect.py             |   3 +-
+ procta/evaluation.py         |  31 ++++-
+ procta/events.py             |  68 +++++++++++
+ procta/signals.py            |  53 ++++++++-
+ procta/temporal.py           |  49 +++++++-
+ scripts/dashboard.py         |  60 +++++++---
+ scripts/evaluate_sessions.py | 115 ++++++++++++++++++
+ scripts/live.py              | 221 ++++++++++++++++++++++++++++++-----
+ scripts/record_session.py    |   2 +-
+ scripts/run_offline.py       |  16 ++-
+ tests/test_week5.py          | 129 ++++++++++++++++++++
+ 20 files changed, 1065 insertions(+), 91 deletions(-)
+ create mode 100644 configs/exam_context.json
+ create mode 100644 data/splits.csv
+ create mode 100644 docs/annotation_guide.md
+ create mode 100644 docs/protocol_v2_solo.csv
+ create mode 100644 procta/clips.py
+ create mode 100644 procta/context.py
+ create mode 100644 procta/events.py
+ create mode 100644 scripts/evaluate_sessions.py
+ create mode 100644 tests/test_week5.py
+
+diff --git a/README.md b/README.md
+index cd2b37e..4dee803 100644
+--- a/README.md
++++ b/README.md
+@@ -15,37 +15,48 @@ python -m pytest -q                                     # 13 tests
+ ```
+ YOLOv8 weights download automatically on first run (or put them in `models/`).
+ 
+-## Workflow
++## Workflow (week 5: robot route, evidence clips, exam context)
+ ```bash
+-# 1. Record a staged session that follows the timed protocol (ground truth by design)
+-python scripts/record_session.py --name s01_daylight
++# 0. Describe the mock exam and the robot's observation route
++#    configs/exam_context.json  (permitted devices, neighbour side / clock side per point, ignore zones)
++#    docs/annotation_guide.md   (event definitions, lookalikes, room set-up, recording plan)
+ 
+-# 2. Check / correct the ground truth on the video
+-python scripts/label_video.py --video data/videos/s01_daylight.mp4
++# 1. Live demo - the camera plays the robot's camera; n/p = move to next/previous observation point
++python scripts/live.py --mode context --auto-route        # proposed: temporal + consolidation + context
++python scripts/live.py --mode improved                    # temporal + consolidation, no context
++python scripts/live.py --mode frame                       # B0 frame-level baseline
++python scripts/dashboard.py                               # review page: http://localhost:8765
+ 
+-# 3. Run the detectors once, cache detections
+-python scripts/extract_detections.py --video data/videos/s01_daylight.mp4
++# 2. Record staged sessions (solo protocol: phone + viewing neighbour's paper, with lookalikes)
++python scripts/record_session.py --name s01               # uses docs/protocol_v2_solo.csv
++python scripts/label_video.py --video data/videos/s01.mp4
++python scripts/extract_detections.py --video data/videos/s01.mp4
+ 
+-# 4. Frame-level (B0) vs 3-s persistence (B1) vs improved: alerts, metrics, evidence, review pages
+-python scripts/run_offline.py --detections data/detections/s01_daylight.jsonl \
+-    --gt data/labels/s01_daylight_gt.csv --video data/videos/s01_daylight.mp4
+-#    -> results/s01_daylight/metrics.md, review_improved.html
++# 3. One session, all four methods
++python scripts/run_offline.py --detections data/detections/s01.jsonl --gt data/labels/s01_gt.csv --point A
+ 
+-# Live demo: --mode frame | baseline (= original script) | improved
+-python scripts/live.py --mode improved
++# 4. All sessions, dev/test split (data/splits.csv), thresholds frozen before testing
++python scripts/evaluate_sessions.py --set dev
++python scripts/evaluate_sessions.py --freeze configs/thresholds_frozen.json
++python scripts/evaluate_sessions.py --set test --thresholds configs/thresholds_frozen.json
+ 
+-# Alert log + dashboard: every live alert (time, alert name, confidence, consistency, evidence)
+-# goes into results/alerts.db; review alerts and see accuracy (confirmed / reviewed) at
+-python scripts/dashboard.py        # -> http://localhost:8765, 'Download CSV' for Excel
++# Replay any recording as if live (demo with a different input)
++python scripts/live.py --mode context --video data/videos/s04.mp4
+ ```
+-Other: `scripts/simulate_detector_noise.py` (controlled detector-flicker experiment),
+-`scripts/analyze_live_log.py` (stats on the original live log).
++
++Methods compared on identical detections: **B0** frame-level (`frame`), **B1** 3-s rule (`baseline`),
++**temporal confirmation + consolidation** (`improved`), **+ examination context** (`context`, the focused
++improvement). Every confirmed event is one record with timestamp, observation point, image region, a still,
++one evidence clip per sighting (animated WebP + MP4) and the invigilator's Confirm / Dismiss decision.
+ 
+ ## Layout
+ ```
+-procta/       config, detect (YOLO), signals (per-frame events), temporal (baseline + improved alerting),
++procta/       config, detect (YOLO), signals (per-frame events), temporal (B0/B1/temporal alerting), events (consolidation),
++              context (exam rules + route), clips (rolling-buffer evidence clips), alert_log (SQLite),
+               evaluation (event-level P/R/false alarms/latency), review (proctor review page), draw
+-scripts/      record_session, label_video, extract_detections, run_offline, live, simulate_detector_noise, analyze_live_log
++scripts/      live, dashboard, record_session, label_video, extract_detections, run_offline, evaluate_sessions,
++              simulate_detector_noise, analyze_live_log
++configs/      exam_context.json (rules + observation route), thresholds_frozen.json (after --freeze)
+ docs/         event definitions, recording protocol, week-2 report
+ data/labels/  ground truth CSVs (videos are git-ignored)
+ results/      metrics and simulation outputs
+diff --git a/configs/exam_context.json b/configs/exam_context.json
+new file mode 100644
+index 0000000..df0cced
+--- /dev/null
++++ b/configs/exam_context.json
+@@ -0,0 +1,45 @@
++{
++  "exam": "PROCTA mock quiz v1 (staged, ungraded)",
++  "notes": "Rules for this mock exam. Used only by --mode context; the other modes ignore it. Sides are IMAGE sides as the camera sees them: 'right' means the student's nose moves towards the right edge of the camera image (check with the yaw readout in live.py: positive yaw = image right).",
++
++  "permitted_devices": ["calculator"],
++  "permitted_materials": ["question sheet", "one A4 formula sheet"],
++  "authorised_interactions": ["handing the paper to the invigilator", "raising a hand to ask the invigilator"],
++
++  "seats": [
++    {"id": "S1", "participant": "P01", "neighbour_desk": "S2 (empty desk with an answer sheet)"}
++  ],
++
++  "insufficient_view_s": 4.0,
++  "consolidation_window_s": 30.0,
++
++  "observation_points": [
++    {
++      "id": "A",
++      "name": "Front of desk, slightly left",
++      "dwell_s": 120,
++      "neighbour_side": "left",
++      "allowed_look_sides": ["right"],
++      "allowed_look_reason": "wall clock and invigilator are on the image right",
++      "ignore_zones": []
++    },
++    {
++      "id": "B",
++      "name": "Side view from the aisle",
++      "dwell_s": 120,
++      "neighbour_side": "right",
++      "allowed_look_sides": ["left"],
++      "allowed_look_reason": "invigilator desk is on the image left",
++      "ignore_zones": [[0.0, 0.0, 0.2, 0.5]]
++    },
++    {
++      "id": "C",
++      "name": "Front-right, elevated",
++      "dwell_s": 120,
++      "neighbour_side": "left",
++      "allowed_look_sides": ["right"],
++      "allowed_look_reason": "wall clock on the image right",
++      "ignore_zones": []
++    }
++  ]
++}
+diff --git a/data/splits.csv b/data/splits.csv
+new file mode 100644
+index 0000000..4550f27
+--- /dev/null
++++ b/data/splits.csv
+@@ -0,0 +1,7 @@
++session,split,point
++s01,dev,A
++s02,dev,B
++s03,dev,C
++s04,test,A
++s05,test,B
++s06,test,C
+diff --git a/docs/annotation_guide.md b/docs/annotation_guide.md
+new file mode 100644
+index 0000000..353e8cf
+--- /dev/null
++++ b/docs/annotation_guide.md
+@@ -0,0 +1,61 @@
++# Annotation guide (v2, Oct 2026)
++
++A label says **what was visible**, never whether it was misconduct. "phone_in_hand" means a phone
++was seen in the participant's hand; whether that breaks the exam rules is decided by the exam
++context file and, finally, by the invigilator. Annotators never write "cheating".
++
++Ground truth is one CSV per session (`data/labels/<session>_gt.csv`):
++`event_type,start_s,end_s,note`. The recording protocol pre-fills it; correct the times on video
++with `python scripts/label_video.py --video data/videos/<session>.mp4`.
++
++## Category 1 - possible mobile-phone use (`phone_in_hand`)
++
++| | Definition |
++|---|---|
++| Observable criteria | A phone is visible and held in the participant's hand (looking at it, typing, holding it low near the desk edge). |
++| Start | First frame the phone is in the hand. |
++| End | Last frame before the phone leaves the hand. |
++| Target event | Held for at least 3 s. |
++| Normal lookalikes (`lookalike_*`) | Permitted calculator in hand; phone glanced at or touched < 3 s; pencil case, eraser or ruler in hand. |
++| Uncertain / occluded | Phone partly covered by the hand or the desk edge; label it `phone_in_hand` with note `occluded` if a human can still see it is a phone, otherwise leave it unlabelled. |
++| Repeated sightings | Phone put down for less than 30 s and taken out again = **one** labelled event spanning both sightings (note `repeat`). The system should produce one record. |
++
++## Category 2 - possible viewing of another participant's paper (`head_turned`)
++
++| | Definition |
++|---|---|
++| Observable criteria | Head (or head and upper body) turned towards the neighbouring desk and held. Orientation alone does not show that anything was read. |
++| Start | Head begins to turn towards the neighbour desk. |
++| End | Head faces the participant's own paper again. |
++| Target event | Held for at least 3 s, towards the **neighbour desk**. |
++| Normal lookalikes (`lookalike_*`) | Looking at the wall clock, at the invigilator, raising a hand to ask a question, a glance < 3 s, looking down at one's own paper. |
++| Uncertain / occluded | Face partly covered by a hand, head turned away from the camera; label with note `occluded`. |
++| Repeated sightings | Several looks at the neighbour desk with short breaks (< 30 s) = **one** labelled event (note `repeat`). |
++
++## Not events, logged separately
++
++- `insufficient_view`: the participant cannot be seen clearly (back to the camera, out of frame). The
++  robot logs it and moves to the next permitted observation point; it is never an alert.
++
++## Room set-up for solo recordings (protocol `docs/protocol_v2_solo.csv`)
++
++1. One desk for the participant, an empty "neighbour" desk with an answer sheet on one side, a clock (or a
++   printed clock) on the other side, and the "invigilator" position on the clock side.
++2. Run `python scripts/live.py --mode improved`, turn your head towards the neighbour desk and read the
++   yaw label: `image left` or `image right`. Write that side as `neighbour_side` for this observation
++   point in `configs/exam_context.json`, and the clock / invigilator side in `allowed_look_sides`.
++3. Repeat for each observation point (A, B, C): sides can flip when the camera moves.
++
++## Recording plan (single participant)
++
++| Session | Point | Lighting | Split |
++|---|---|---|---|
++| s01 | A | daylight | dev |
++| s02 | B | daylight | dev |
++| s03 | C | evening lamp | dev |
++| s04 | A | evening lamp | test |
++| s05 | B | evening lamp | test |
++| s06 | C | daylight, different clothes | test |
++
++Tune thresholds on s01-s03 only, freeze them (`evaluate_sessions.py --freeze`), then run the test
++sessions once. With more participants later, split by participant instead of by session.
+diff --git a/docs/protocol_v2_solo.csv b/docs/protocol_v2_solo.csv
+new file mode 100644
+index 0000000..94b1dba
+--- /dev/null
++++ b/docs/protocol_v2_solo.csv
+@@ -0,0 +1,26 @@
++start_s,end_s,event_type,instruction
++0,20,none,Sit still facing your paper and write (calibration)
++20,35,phone_in_hand,PHONE: take the phone out and use it in your hand
++35,50,none,Put the phone away and write
++50,52,lookalike_phone_glance,Glance at the phone for ~2 s only (should NOT alert)
++52,65,none,Write
++65,80,lookalike_calculator,Use the CALCULATOR in your hand (permitted - should NOT alert)
++80,95,none,Put the calculator down and write
++95,110,phone_in_hand,PHONE held low at the desk edge and partly covered by your hand (occluded)
++110,125,none,Put the phone away and write
++125,146,phone_in_hand,REPEAT: phone in hand 8 s - put it down 5 s - phone in hand again 8 s (should become ONE event)
++146,165,none,Write
++165,175,head_turned,Turn your head towards the NEIGHBOUR desk and hold it
++175,190,none,Face your paper and write
++190,198,lookalike_clock,Look at the CLOCK and hold it (permitted point of interest)
++198,210,none,Write
++210,212,lookalike_neighbour_glance,Quick ~2 s glance at the neighbour desk (should NOT alert)
++212,225,none,Write
++225,241,head_turned,REPEAT: look at the NEIGHBOUR desk 6 s - face your paper 4 s - neighbour desk again 6 s (ONE event)
++241,255,none,Write
++255,265,lookalike_invigilator,Raise your hand and look towards the INVIGILATOR (authorised interaction)
++265,280,none,Write
++280,290,insufficient_view,Turn your back to the camera or lean out of view (robot should report insufficient view)
++290,310,none,Sit back and write
++310,320,head_turned,Look at the NEIGHBOUR desk while covering part of your face with your hand (occluded)
++320,340,none,Write normally until the end
+diff --git a/procta/alert_log.py b/procta/alert_log.py
+index 5d5f504..df387b9 100644
+--- a/procta/alert_log.py
++++ b/procta/alert_log.py
+@@ -33,8 +33,15 @@ CREATE TABLE IF NOT EXISTS alerts (
+     confidence REAL, confidence_level TEXT, positive_ratio REAL, episode_start_s REAL,
+     duration_s REAL, evidence TEXT, review TEXT, reviewed_at TEXT);
+ CREATE INDEX IF NOT EXISTS alerts_session ON alerts(session);
++CREATE TABLE IF NOT EXISTS observations (
++    id INTEGER PRIMARY KEY AUTOINCREMENT, session TEXT, timestamp TEXT, t_session_s REAL,
++    point TEXT, kind TEXT, note TEXT);
+ """
+ 
++# Columns added in week 5 (robot route, consolidation, clips). Old databases are migrated on open.
++NEW_ALERT_COLUMNS = {"observation_point": "TEXT", "sightings": "INTEGER DEFAULT 1", "last_seen_s": "REAL",
++                     "clips": "TEXT", "region": "TEXT", "context_note": "TEXT"}
++
+ 
+ def confidence_level(conf):
+     if conf is None or conf != conf:
+@@ -47,6 +54,11 @@ def connect(db_path):
+     con.row_factory = sqlite3.Row
+     con.execute("PRAGMA journal_mode=WAL")      # dashboard can read while live.py writes
+     con.executescript(SCHEMA)
++    have = {r[1] for r in con.execute("PRAGMA table_info(alerts)")}
++    for col, typ in NEW_ALERT_COLUMNS.items():
++        if col not in have:
++            con.execute(f"ALTER TABLE alerts ADD COLUMN {col} {typ}")
++    con.commit()
+     return con
+ 
+ 
+@@ -58,20 +70,46 @@ class AlertLog:
+                              (session, mode, started_at.isoformat(timespec="seconds"), None, camera,
+                               resolution, json.dumps(config or {})))
+ 
+-    def add(self, alert, evidence=""):
+-        """alert: temporal.Alert. evidence: image path relative to results/."""
++    def add(self, alert, evidence="", point=None, region=None, clip=None, context_note=None):
++        """alert: temporal.Alert. evidence / clip: paths relative to results/. Returns the row id."""
+         conf = None if alert.confidence != alert.confidence else float(alert.confidence)
+         ratio = None if alert.positive_ratio != alert.positive_ratio else float(alert.positive_ratio)
+         ts = self.started_at + timedelta(seconds=alert.t_alert)
+         with self.con:
+-            self.con.execute(
++            cur = self.con.execute(
+                 "INSERT INTO alerts (session, mode, timestamp, t_session_s, track_id, event_type, alert_name,"
+-                " message, confidence, confidence_level, positive_ratio, episode_start_s, duration_s, evidence)"
+-                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
++                " message, confidence, confidence_level, positive_ratio, episode_start_s, duration_s, evidence,"
++                " observation_point, sightings, last_seen_s, clips, region, context_note)"
++                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                 (self.session, self.mode, ts.isoformat(timespec="seconds"), round(alert.t_alert, 2),
+                  int(alert.track_id), alert.event_type, EVENT_NAMES.get(alert.event_type, alert.event_type),
+                  alert.message(ts.strftime("%H:%M:%S")), conf, confidence_level(conf), ratio,
+-                 round(alert.t_start, 2), round(alert.t_alert - alert.t_start, 2), evidence))
++                 round(alert.t_start, 2), round(alert.t_alert - alert.t_start, 2), evidence,
++                 point, 1, round(alert.t_alert, 2), json.dumps([clip] if clip else []),
++                 json.dumps(region) if region else None, context_note))
++        return cur.lastrowid
++
++    def update_event(self, row_id, sightings=None, last_seen_s=None, add_clip=None):
++        """A repeated sighting was consolidated into this record."""
++        with self.con:
++            row = self.con.execute("SELECT sightings, last_seen_s, clips FROM alerts WHERE id=?", (row_id,)).fetchone()
++            if row is None:
++                return
++            clips = json.loads(row["clips"] or "[]")
++            if add_clip and add_clip not in clips:
++                clips.append(add_clip)
++            self.con.execute("UPDATE alerts SET sightings=?, last_seen_s=?, clips=? WHERE id=?",
++                             (sightings if sightings is not None else row["sightings"],
++                              round(last_seen_s, 2) if last_seen_s is not None else row["last_seen_s"],
++                              json.dumps(clips), row_id))
++
++    def observe(self, t_session, point, kind, note=""):
++        """Robot observation log: arrival at a point, insufficient view, leaving a point."""
++        ts = self.started_at + timedelta(seconds=t_session)
++        with self.con:
++            self.con.execute("INSERT INTO observations (session, timestamp, t_session_s, point, kind, note)"
++                             " VALUES (?,?,?,?,?,?)",
++                             (self.session, ts.isoformat(timespec="seconds"), round(t_session, 2), point, kind, note))
+ 
+     def close(self):
+         with self.con:
+diff --git a/procta/clips.py b/procta/clips.py
+new file mode 100644
+index 0000000..416964c
+--- /dev/null
++++ b/procta/clips.py
+@@ -0,0 +1,96 @@
++"""Evidence clips from a rolling video buffer.
++
++The last `pre_s` seconds of (annotated) frames are always kept in memory. When an event
++is confirmed - which happens persistence_s AFTER it started - the clip therefore still
++begins before the behaviour started. Recording continues until the episode ends (plus
++`post_s`), capped at `max_s`. Each clip is written twice, in a background thread:
++
++  <name>.webp  animated, plays directly in the dashboard (every browser supports it)
++  <name>.mp4   for VLC / download (mp4v codec; browsers may not play it)
++"""
++
++import threading
++from collections import deque
++from pathlib import Path
++
++import cv2
++
++
++class ClipRecorder:
++    def __init__(self, out_dir, pre_s=6.0, post_s=1.5, max_s=30.0, fps=6.0, width=480):
++        self.out_dir = Path(out_dir)
++        self.out_dir.mkdir(parents=True, exist_ok=True)
++        self.pre_s, self.post_s, self.max_s, self.fps, self.width = pre_s, post_s, max_s, fps, width
++        self.buffer = deque()
++        self.active = {}             # name -> {"frames": [(t, img)], "end": float or None, "t0": float}
++        self._last_t = None
++        self.threads = []
++
++    def _small(self, frame):
++        h, w = frame.shape[:2]
++        if w <= self.width:
++            return frame.copy()
++        return cv2.resize(frame, (self.width, int(h * self.width / w)), interpolation=cv2.INTER_AREA)
++
++    def push(self, t, frame):
++        """Call once per frame with the annotated frame. Returns names of clips that were finished."""
++        if self._last_t is not None and t - self._last_t < 0.9 / self.fps:
++            return self._finish_due(t)
++        self._last_t = t
++        img = self._small(frame)
++        self.buffer.append((t, img))
++        while self.buffer and t - self.buffer[0][0] > self.pre_s:
++            self.buffer.popleft()
++        for c in self.active.values():
++            c["frames"].append((t, img))
++        return self._finish_due(t)
++
++    def start(self, name, t_from):
++        """Begin a clip whose first frame is the buffered frame at or after t_from - 1 s."""
++        frames = [(t, f) for t, f in self.buffer if t >= t_from - 1.0]
++        self.active[name] = {"frames": frames, "end": None, "t0": frames[0][0] if frames else t_from}
++        return f"{name}.webp"
++
++    def stop(self, name, t_end):
++        if name in self.active and self.active[name]["end"] is None:
++            self.active[name]["end"] = t_end + self.post_s
++
++    def stop_all(self, t):
++        for name in list(self.active):
++            self.stop(name, t)
++        return self._finish_due(float("inf"))
++
++    def _finish_due(self, t):
++        done = []
++        for name, c in list(self.active.items()):
++            too_long = c["frames"] and c["frames"][-1][0] - c["t0"] >= self.max_s
++            if (c["end"] is not None and t >= c["end"]) or too_long:
++                frames = [f for ft, f in c["frames"] if c["end"] is None or ft <= c["end"]]
++                del self.active[name]
++                th = threading.Thread(target=self._write, args=(name, frames), daemon=True)
++                th.start()
++                self.threads.append(th)
++                done.append(name)
++        return done
++
++    def _write(self, name, frames):
++        if not frames:
++            return
++        h, w = frames[0].shape[:2]
++        vw = cv2.VideoWriter(str(self.out_dir / f"{name}.mp4"), cv2.VideoWriter_fourcc(*"mp4v"), self.fps, (w, h))
++        for f in frames:
++            vw.write(f)
++        vw.release()
++        from PIL import Image
++        ims = [Image.fromarray(cv2.cvtColor(f, cv2.COLOR_BGR2RGB)) for f in frames]
++        try:
++            ims[0].save(self.out_dir / f"{name}.webp", save_all=True, append_images=ims[1:],
++                        duration=int(1000 / self.fps), loop=0, quality=60)
++        except Exception as e:                     # Pillow without WebP: fall back to GIF
++            print(f"[clips] webp failed ({e}); writing GIF")
++            ims[0].save(self.out_dir / f"{name}.gif", save_all=True, append_images=ims[1:],
++                        duration=int(1000 / self.fps), loop=0)
++
++    def join(self, timeout=10):
++        for th in self.threads:
++            th.join(timeout)
+diff --git a/procta/config.py b/procta/config.py
+index e4c5014..41bd744 100644
+--- a/procta/config.py
++++ b/procta/config.py
+@@ -42,3 +42,13 @@ class Config:
+ 
+     def to_dict(self):
+         return asdict(self)
++
++
++def load_config(path=None) -> Config:
++    """Config with thresholds from a frozen JSON file (keys = Config fields), or defaults."""
++    import json
++    from pathlib import Path
++    if not path:
++        return Config()
++    raw = json.loads(Path(path).read_text(encoding="utf-8"))
++    return Config(**{k: v for k, v in raw.items() if k in Config.__dataclass_fields__})
+diff --git a/procta/context.py b/procta/context.py
+new file mode 100644
+index 0000000..10f233e
+--- /dev/null
++++ b/procta/context.py
+@@ -0,0 +1,63 @@
++"""Examination context: the rules of this mock exam and the robot's observation route.
++
++Some events cannot be interpreted without context (supervisor feedback, Oct 2026):
++a head turn towards the wall clock is normal, a head turn towards the neighbour's
++desk is worth a look; a calculator may be allowed, a phone is not. The context file
++(configs/exam_context.json) says which is which. It never turns an event into a
++misconduct judgement - it only decides whether an observation is worth a reviewer's time.
++"""
++
++import json
++from dataclasses import dataclass, field
++from pathlib import Path
++
++DEFAULT_PATH = Path(__file__).resolve().parents[1] / "configs" / "exam_context.json"
++
++
++@dataclass
++class ObservationPoint:
++    id: str
++    name: str = ""
++    dwell_s: float = 120.0
++    neighbour_side: str = ""                 # "left" / "right" (image side) or "" if no neighbour visible
++    allowed_look_sides: list = field(default_factory=list)
++    allowed_look_reason: str = ""
++    ignore_zones: list = field(default_factory=list)   # [x1, y1, x2, y2] as fractions of the image
++
++
++@dataclass
++class ExamContext:
++    exam: str = ""
++    permitted_devices: list = field(default_factory=list)
++    permitted_materials: list = field(default_factory=list)
++    authorised_interactions: list = field(default_factory=list)
++    seats: list = field(default_factory=list)
++    insufficient_view_s: float = 4.0
++    consolidation_window_s: float = 30.0
++    observation_points: list = field(default_factory=list)
++
++    @classmethod
++    def load(cls, path=DEFAULT_PATH):
++        raw = json.loads(Path(path).read_text(encoding="utf-8"))
++        pts = [ObservationPoint(**{k: v for k, v in p.items() if k in ObservationPoint.__dataclass_fields__})
++               for p in raw.get("observation_points", [])]
++        kw = {k: v for k, v in raw.items() if k in cls.__dataclass_fields__ and k != "observation_points"}
++        return cls(observation_points=pts or [ObservationPoint("A")], **kw)
++
++    def point(self, pid):
++        return next((p for p in self.observation_points if p.id == pid), self.observation_points[0])
++
++    def device_permitted(self, coco_name: str) -> bool:
++        return coco_name in self.permitted_devices
++
++    def to_dict(self):
++        from dataclasses import asdict
++        return asdict(self)
++
++
++def in_zone(box, zones, wh):
++    """True if the centre of box (pixels) lies in any normalised zone."""
++    if not zones or not wh:
++        return False
++    cx, cy = (box[0] + box[2]) / 2.0 / wh[0], (box[1] + box[3]) / 2.0 / wh[1]
++    return any(z[0] <= cx <= z[2] and z[1] <= cy <= z[3] for z in zones)
+diff --git a/procta/detect.py b/procta/detect.py
+index 301817f..46cb2ef 100644
+--- a/procta/detect.py
++++ b/procta/detect.py
+@@ -58,7 +58,8 @@ class Detector:
+                     "kps": [[round(float(x), 1), round(float(y), 1), round(float(c), 3)]
+                             for (x, y), c in zip(kxy[i], kconf[i])],
+                 })
+-        return {"t": round(t, 4), "persons": persons, "phones": list(self._cached_phones)}
++        h, w = frame.shape[:2]
++        return {"t": round(t, 4), "wh": [w, h], "persons": persons, "phones": list(self._cached_phones)}
+ 
+ 
+ def save_detections(path: Path, meta: dict, frames: list):
+diff --git a/procta/evaluation.py b/procta/evaluation.py
+index 1029fe3..06009ea 100644
+--- a/procta/evaluation.py
++++ b/procta/evaluation.py
+@@ -73,6 +73,8 @@ def evaluate(alerts, gt, duration_s, persistence_s=3.0, tolerance_s=1.0, event_t
+             "recall": detected / len(targets) if targets else float("nan"),
+             "missed_event_rate": 1 - detected / len(targets) if targets else float("nan"),
+             "false_alarms_per_min": n_false / (duration_s / 60.0),
++            "false_alerts_per_hour": n_false / (duration_s / 3600.0),
++            "duplicate_alerts": n_true - detected,
+             "mean_latency_s": st.mean(lat) if lat else float("nan"),
+             "alerts_per_episode": n_true / detected if detected else float("nan"),
+         }
+@@ -84,6 +86,8 @@ def evaluate(alerts, gt, duration_s, persistence_s=3.0, tolerance_s=1.0, event_t
+         "recall": tot["detected"] / tot["target_episodes"] if tot["target_episodes"] else float("nan"),
+         "missed_event_rate": (1 - tot["detected"] / tot["target_episodes"]) if tot["target_episodes"] else float("nan"),
+         "false_alarms_per_min": tot["false_alerts"] / (duration_s / 60.0),
++        "false_alerts_per_hour": tot["false_alerts"] / (duration_s / 3600.0),
++        "duplicate_alerts": int(tot["true_alerts"] - tot["detected"]),
+         "mean_latency_s": st.mean(all_lat) if all_lat else float("nan"),
+         "alerts_per_episode": tot["true_alerts"] / tot["detected"] if tot["detected"] else float("nan"),
+     }
+@@ -91,7 +95,32 @@ def evaluate(alerts, gt, duration_s, persistence_s=3.0, tolerance_s=1.0, event_t
+ 
+ 
+ COLS = ["alerts", "target_episodes", "detected", "precision", "recall", "missed_event_rate",
+-        "false_alarms_per_min", "mean_latency_s", "alerts_per_episode"]
++        "false_alerts_per_hour", "duplicate_alerts", "mean_latency_s", "alerts_per_episode"]
++
++
++def aggregate(results_list, durations):
++    """Combine per-session results (from evaluate) into one result over all sessions:
++    counts are summed, rates recomputed, latency averaged over detected episodes."""
++    total_s = sum(durations)
++    types = sorted({ev for r in results_list for ev in r if ev != "ALL"}) + ["ALL"]
++    out = {}
++    for ev in types:
++        c = {k: sum(r.get(ev, {}).get(k, 0) for r in results_list)
++             for k in ("alerts", "true_alerts", "false_alerts", "target_episodes", "detected")}
++        lat_w = [(r[ev]["mean_latency_s"], r[ev]["detected"]) for r in results_list
++                 if ev in r and r[ev]["detected"] and r[ev]["mean_latency_s"] == r[ev]["mean_latency_s"]]
++        out[ev] = {
++            **c,
++            "precision": c["true_alerts"] / c["alerts"] if c["alerts"] else float("nan"),
++            "recall": c["detected"] / c["target_episodes"] if c["target_episodes"] else float("nan"),
++            "missed_event_rate": 1 - c["detected"] / c["target_episodes"] if c["target_episodes"] else float("nan"),
++            "false_alarms_per_min": c["false_alerts"] / (total_s / 60.0),
++            "false_alerts_per_hour": c["false_alerts"] / (total_s / 3600.0),
++            "duplicate_alerts": c["true_alerts"] - c["detected"],
++            "mean_latency_s": (sum(l * n for l, n in lat_w) / sum(n for _, n in lat_w)) if lat_w else float("nan"),
++            "alerts_per_episode": c["true_alerts"] / c["detected"] if c["detected"] else float("nan"),
++        }
++    return out
+ 
+ 
+ def to_markdown(results: dict, title=""):
+diff --git a/procta/events.py b/procta/events.py
+new file mode 100644
+index 0000000..67f075e
+--- /dev/null
++++ b/procta/events.py
+@@ -0,0 +1,68 @@
++"""Event consolidation: repeated sightings of the same behaviour become ONE reviewable record.
++
++The temporal alerter turns flickering frames into episodes. But a student can also put
++the phone away and take it out again 10 s later, or the robot can see the same head turn
++again after a short occlusion. Without consolidation each of those is a new alert the
++invigilator has to open. Here a new confirmed episode is attached to an existing event
++when it has the same event type, is seen from the same observation point, and starts
++within `window_s` of the event's last sighting. The evidence of every sighting is kept.
++
++Track ids are not used for matching: the pose tracker often gives the same student a new
++id after an occlusion (4 ids for one person in the live log), so matching on id would
++split one event into several.
++"""
++
++from dataclasses import dataclass, field
++
++
++@dataclass
++class Event:
++    id: int
++    event_type: str
++    point: str
++    t_start: float               # start of the first sighting (video / session seconds)
++    t_alert: float               # when the first sighting was confirmed
++    t_last_seen: float
++    confidence: float
++    track_ids: set = field(default_factory=set)
++    sightings: int = 1
++    sighting_starts: list = field(default_factory=list)
++    clips: list = field(default_factory=list)
++    log_id: int = None           # row id in the alert log, if logged
++
++
++class EventConsolidator:
++    def __init__(self, window_s: float = 30.0):
++        self.window_s = window_s
++        self.events = []
++
++    def _match(self, event_type, point, t_start):
++        for ev in reversed(self.events):
++            if ev.event_type == event_type and ev.point == point and t_start - ev.t_last_seen <= self.window_s:
++                return ev
++        return None
++
++    def on_alert(self, alert, point="A"):
++        """alert: temporal.Alert. Returns (event, is_new)."""
++        conf = 0.0 if alert.confidence != alert.confidence else float(alert.confidence)
++        ev = self._match(alert.event_type, point, alert.t_start)
++        if ev is not None:
++            ev.sightings += 1
++            ev.sighting_starts.append(alert.t_start)
++            ev.t_last_seen = max(ev.t_last_seen, alert.t_alert)
++            ev.confidence = max(ev.confidence, conf)
++            ev.track_ids.add(alert.track_id)
++            return ev, False
++        ev = Event(len(self.events) + 1, alert.event_type, point, alert.t_start, alert.t_alert, alert.t_alert,
++                   conf, {alert.track_id}, 1, [alert.t_start])
++        self.events.append(ev)
++        return ev, True
++
++    def on_episode_end(self, key, last_on, point="A"):
++        """An alerted episode ended: extend the matching event's last sighting."""
++        _, event_type = key
++        for ev in reversed(self.events):
++            if ev.event_type == event_type and ev.point == point:
++                ev.t_last_seen = max(ev.t_last_seen, last_on)
++                return ev
++        return None
+diff --git a/procta/signals.py b/procta/signals.py
+index a7328c0..819ec1c 100644
+--- a/procta/signals.py
++++ b/procta/signals.py
+@@ -20,10 +20,11 @@ to one side). In profile one eye disappears, which also counts as turned. Lookin
+ down is deliberately not an event: it is normal when writing on paper.
+ """
+ 
+-from collections import defaultdict
++from collections import Counter, defaultdict
+ 
+ import numpy as np
+ 
++from .context import in_zone
+ from .config import (Config, LEFT_EYE, LEFT_SHOULDER, LEFT_WRIST, NOSE, RIGHT_EYE, RIGHT_SHOULDER,
+                      RIGHT_WRIST)
+ 
+@@ -61,9 +62,17 @@ def assign_phone_owners(phones, persons, max_dist_factor=0.5):
+ 
+ 
+ class SignalExtractor:
+-    def __init__(self, cfg: Config, mode: str = "improved"):
+-        assert mode in ("baseline", "improved")
+-        self.cfg, self.mode = cfg, mode
++    def __init__(self, cfg: Config, mode: str = "improved", context=None, point=None):
++        """mode: "baseline" (original rules), "improved" (owner assignment + keypoint gating),
++        "context" (= improved + examination context: permitted devices, ignore zones,
++        head turns only towards the neighbour's desk). context: procta.context.ExamContext."""
++        assert mode in ("baseline", "improved", "context")
++        if mode == "context" and context is None:
++            from .context import ExamContext
++            context = ExamContext.load()
++        self.cfg, self.mode, self.context = cfg, mode, context
++        self.point = point if point is not None else (context.observation_points[0] if context else None)
++        self.suppressed = Counter()             # context mode: observations dropped, by reason
+         self.prev_shoulder = {}                 # track -> (xy, t)
+         self.seat_samples = defaultdict(list)
+         self.seat_baseline = {}
+@@ -71,6 +80,16 @@ class SignalExtractor:
+         self.head_baseline = {}
+         self.head_yaw = {}                      # track -> latest yaw offset (for the live overlay)
+ 
++    def set_point(self, point):
++        """New observation point = new viewpoint: re-calibrate seat and head pose."""
++        self.point = point
++        self.prev_shoulder.clear()
++        self.seat_samples.clear()
++        self.seat_baseline.clear()
++        self.head_samples.clear()
++        self.head_baseline.clear()
++        self.head_yaw.clear()
++
+     def _kp(self, person, idx):
+         x, y, c = person["kps"][idx]
+         xy = np.array([x, y])
+@@ -102,8 +121,20 @@ class SignalExtractor:
+         persons, phones = frame["persons"], frame["phones"]
+         out = {}
+ 
++        ctx = self.context if self.mode == "context" else None
++        if ctx is not None:
++            kept = []
++            for ph in phones:
++                if ctx.device_permitted("cell phone"):
++                    self.suppressed["phone permitted by exam rules"] += 1
++                elif self.point is not None and in_zone(ph["box"], self.point.ignore_zones, frame.get("wh")):
++                    self.suppressed["phone in ignore zone (e.g. invigilator desk)"] += 1
++                else:
++                    kept.append(ph)
++            phones = kept
++
+         owners = (assign_phone_owners(phones, persons)
+-                  if self.mode == "improved" and cfg.assign_phone_to_owner else None)
++                  if self.mode in ("improved", "context") and cfg.assign_phone_to_owner else None)
+ 
+         for j, pe in enumerate(persons):
+             tid = pe["id"]
+@@ -155,5 +186,15 @@ class SignalExtractor:
+                 off = yaw[0] - self.head_baseline[tid]
+                 self.head_yaw[tid] = off
+                 if abs(off) > cfg.head_yaw_thr:
+-                    out[(tid, "head_turned")] = yaw[1]
++                    side = "right" if off > 0 else "left"          # image side the nose moved to
++                    reason = None
++                    if ctx is not None and self.point is not None:
++                        if side in self.point.allowed_look_sides:
++                            reason = f"head turn to allowed side ({side})"
++                        elif self.point.neighbour_side and side != self.point.neighbour_side:
++                            reason = f"head turn away from neighbour ({side})"
++                    if reason:
++                        self.suppressed[reason] += 1
++                    else:
++                        out[(tid, "head_turned")] = yaw[1]
+         return out
+diff --git a/procta/temporal.py b/procta/temporal.py
+index 0fd7f7c..1f858c3 100644
+--- a/procta/temporal.py
++++ b/procta/temporal.py
+@@ -82,9 +82,21 @@ class ConfidenceAwareAlerter:
+     def __init__(self, cfg: Config):
+         self.cfg = cfg
+         self.eps = {}
++        self.closed = []        # episodes that ended in the last step: (key, start, last_on, alerted)
++
++    def flush(self):
++        """End every open episode (e.g. the robot leaves this observation point)."""
++        self.closed = [(k, ep.start, ep.last_on, ep.alerted) for k, ep in self.eps.items()]
++        self.eps = {}
++        return self.closed
++
++    def last_seen(self, key):
++        ep = self.eps.get(key)
++        return ep.last_on if ep else None
+ 
+     def step(self, t: float, signals: dict, present_tracks: set = None):
+         cfg, alerts = self.cfg, []
++        self.closed = []
+         for key, conf in signals.items():
+             ep = self.eps.get(key)
+             if ep is None:
+@@ -103,6 +115,7 @@ class ConfidenceAwareAlerter:
+             if key not in signals:
+                 ep.last_t = t                  # off time is not credited to on_time
+                 if t - ep.last_on > cfg.gap_tolerance_s:
++                    self.closed.append((key, ep.start, ep.last_on, ep.alerted))
+                     del self.eps[key]          # episode over
+                 continue
+             dur = t - ep.start
+@@ -129,21 +142,45 @@ class FrameLevelAlerter:
+         return alerts
+ 
+ 
+-MODES = ("frame", "baseline", "improved")   # B0 frame-level, B1 3-s persistence, proposed
++# B0 frame-level, B1 3-s persistence, temporal confirmation + consolidation,
++# temporal confirmation + consolidation + examination context (the focused improvement)
++MODES = ("frame", "baseline", "improved", "context")
+ 
+ 
+ def make_policy(mode: str, cfg: Config):
+     return {"frame": FrameLevelAlerter, "baseline": BaselinePersistence,
+-            "improved": ConfidenceAwareAlerter}[mode](cfg)
++            "improved": ConfidenceAwareAlerter, "context": ConfidenceAwareAlerter}[mode](cfg)
++
++
++def signal_mode(mode: str) -> str:
++    return {"frame": "baseline", "baseline": "baseline", "improved": "improved", "context": "context"}[mode]
+ 
+ 
+-def run_policy(frames, mode: str, cfg: Config):
+-    """Replay cached detections through signals + temporal policy -> list[Alert]."""
++def run_policy(frames, mode: str, cfg: Config, context=None, point=None, return_events=False):
++    """Replay cached detections through signals + temporal policy (+ consolidation for the
++    temporal modes) -> list[Alert] (one per reviewable record). return_events=True also
++    returns the consolidated events and the signal extractor (for suppression counts)."""
++    from .events import EventConsolidator
+     from .signals import SignalExtractor
+-    sig = SignalExtractor(cfg, "improved" if mode == "improved" else "baseline")
++    sig = SignalExtractor(cfg, signal_mode(mode), context=context, point=point)
+     pol = make_policy(mode, cfg)
++    window = context.consolidation_window_s if context is not None else 30.0
++    cons = EventConsolidator(window) if mode in ("improved", "context") else None
++    pid = sig.point.id if sig.point is not None else "A"
+     alerts = []
+     for fr in frames:
+         s = sig(fr)
+-        alerts += pol.step(fr["t"], s, {p["id"] for p in fr["persons"]})
++        new = pol.step(fr["t"], s, {p["id"] for p in fr["persons"]})
++        if cons is None:
++            alerts += new
++            continue
++        for a in new:
++            ev, is_new = cons.on_alert(a, pid)
++            if is_new:
++                alerts.append(a)
++        for key, start, last_on, alerted in pol.closed:
++            if alerted:
++                cons.on_episode_end(key, last_on, pid)
++    if return_events:
++        return alerts, (cons.events if cons else []), sig
+     return alerts
+diff --git a/scripts/dashboard.py b/scripts/dashboard.py
+index 7aac8f3..74551c3 100644
+--- a/scripts/dashboard.py
++++ b/scripts/dashboard.py
+@@ -27,7 +27,9 @@ RESULTS = ROOT / "results"
+ DB = RESULTS / "alerts.db"
+ CSV_COLS = ["id", "session", "mode", "timestamp", "t_session_s", "track_id", "event_type", "alert_name",
+             "message", "confidence", "confidence_level", "positive_ratio", "episode_start_s", "duration_s",
+-            "evidence", "review", "reviewed_at"]
++            "evidence", "observation_point", "sightings", "last_seen_s", "clips", "region", "context_note",
++            "review", "reviewed_at"]
++MEDIA = {".jpg": "image/jpeg", ".png": "image/png", ".webp": "image/webp", ".gif": "image/gif", ".mp4": "video/mp4"}
+ 
+ 
+ def query_alerts(session=None):
+@@ -40,6 +42,16 @@ def query_alerts(session=None):
+     return rows
+ 
+ 
++def query_observations(session=None):
++    con = connect(DB)
++    sql, args = "SELECT * FROM observations", ()
++    if session:
++        sql, args = sql + " WHERE session=?", (session,)
++    rows = [dict(r) for r in con.execute(sql + " ORDER BY timestamp DESC, id DESC LIMIT 200", args)]
++    con.close()
++    return rows
++
++
+ def query_sessions():
+     con = connect(DB)
+     rows = [dict(r) for r in con.execute(
+@@ -71,6 +83,8 @@ class Handler(BaseHTTPRequestHandler):
+             return self._send(PAGE, "text/html; charset=utf-8")
+         if url.path == "/api/alerts":
+             return self._send(json.dumps(query_alerts(q.get("session"))))
++        if url.path == "/api/observations":
++            return self._send(json.dumps(query_observations(q.get("session"))))
+         if url.path == "/api/sessions":
+             return self._send(json.dumps(query_sessions()))
+         if url.path == "/api/export.csv":
+@@ -83,8 +97,8 @@ class Handler(BaseHTTPRequestHandler):
+                               extra={"Content-Disposition": f'attachment; filename="{name}"'})
+         if url.path.startswith("/evidence/"):
+             f = (RESULTS / url.path[len("/evidence/"):]).resolve()
+-            if RESULTS.resolve() in f.parents and f.suffix.lower() in (".jpg", ".png") and f.is_file():
+-                return self._send(f.read_bytes(), "image/jpeg")
++            if RESULTS.resolve() in f.parents and f.suffix.lower() in MEDIA and f.is_file():
++                return self._send(f.read_bytes(), MEDIA[f.suffix.lower()])
+             return self._send(b"not found", "text/plain", 404)
+         return self._send(b"not found", "text/plain", 404)
+ 
+@@ -139,7 +153,8 @@ button.ok{border-color:var(--ok);color:var(--ok)} button.no{border-color:var(--n
+ .tag{padding:2px 8px;border-radius:10px;font-size:12px;border:1px solid currentColor}
+ .confirmed{color:var(--ok)} .dismissed{color:var(--no)}
+ #modal{position:fixed;inset:0;background:rgba(0,0,0,.8);display:none;align-items:center;justify-content:center;padding:16px}
+-#modal img{max-width:100%;max-height:100%} .muted{color:var(--muted)} .empty{padding:24px;text-align:center;color:var(--muted)}
++#modal img,#modal video{max-width:100%;max-height:100%} th.grp{text-align:left;color:var(--text);border-bottom:2px solid var(--line)}
++th.human,td.human{border-left:2px solid var(--accent)} a.clip{margin-right:6px;font-size:12px} .muted{color:var(--muted)} .empty{padding:24px;text-align:center;color:var(--muted)}
+ </style></head><body>
+ <header><h1>PROCTA alert log</h1>
+  <label>Session <select id="session"><option value="">All sessions</option></select></label>
+@@ -160,20 +175,25 @@ button.ok{border-color:var(--ok);color:var(--ok)} button.no{border-color:var(--n
+  <h2>By alert type</h2>
+  <div class="wrap"><table><thead><tr><th>Alert</th><th>Count</th><th>Avg confidence</th><th>Confirmed</th><th>Dismissed</th><th>Not reviewed</th><th>Accuracy</th></tr></thead><tbody id="types"></tbody></table></div>
+  <h2>Alerts (newest first)</h2>
+- <div class="wrap"><table><thead><tr><th>Time</th><th>Session time</th><th>Alert</th><th>Track</th><th>Confidence</th>
+-  <th>Consistency</th><th>Lasted before alert</th><th>Mode</th><th>Evidence</th><th>Review</th></tr></thead><tbody id="rows"></tbody></table></div>
++ <div class="wrap"><table><thead>
++  <tr><th colspan="11" class="grp">Automatic detection (what the system observed)</th><th class="grp human">Invigilator decision</th></tr>
++  <tr><th>Time</th><th>Session time</th><th>Point</th><th>Event</th><th>Track</th><th>Confidence</th>
++  <th>Consistency</th><th>Lasted before alert</th><th>Sightings</th><th>Mode</th><th>Evidence</th><th class="human">Review</th></tr></thead><tbody id="rows"></tbody></table></div>
++ <h2>Robot observation log</h2>
++ <div class="wrap"><table><thead><tr><th>Time</th><th>Session time</th><th>Point</th><th>What happened</th><th>Note</th></tr></thead><tbody id="obs"></tbody></table></div>
+ </main>
+ <div id="modal" onclick="this.style.display='none'"><img id="big" alt="evidence"></div>
+ <script>
+-const $=id=>document.getElementById(id); let alerts=[], sessions=[], seen=null, sig='';
++const $=id=>document.getElementById(id); let alerts=[], sessions=[], obs=[], seen=null, sig='';
+ const pct=x=>x==null?'–':(100*x).toFixed(0)+'%', num=(x,d=2)=>x==null?'–':x.toFixed(d);
+ const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+ async function load(){
+  const s=$('session').value;
+- const [a,ss]=await Promise.all([fetch('/api/alerts'+(s?'?session='+encodeURIComponent(s):'')).then(r=>r.json()),
+-                                 fetch('/api/sessions').then(r=>r.json())]);
+- const nsig=JSON.stringify([a.map(x=>[x.id,x.review]),ss.map(x=>[x.session,x.ended_at,x.n_alerts])]);
+- if(nsig===sig) return; sig=nsig; alerts=a; sessions=ss; render();
++ const qs=s?'?session='+encodeURIComponent(s):'';
++ const [a,ss,ob]=await Promise.all([fetch('/api/alerts'+qs).then(r=>r.json()),
++                                 fetch('/api/sessions').then(r=>r.json()), fetch('/api/observations'+qs).then(r=>r.json())]);
++ const nsig=JSON.stringify([a.map(x=>[x.id,x.review,x.sightings,x.clips]),ss.map(x=>[x.session,x.ended_at,x.n_alerts]),ob.length]);
++ if(nsig===sig) return; sig=nsig; alerts=a; sessions=ss; obs=ob; render();
+ }
+ function render(){
+  const sel=$('session'), cur=sel.value;
+@@ -199,18 +219,24 @@ function render(){
+   ||'<tr><td colspan="7" class="empty">No alerts yet</td></tr>';
+  const ids=new Set(alerts.map(a=>a.id));
+  $('rows').innerHTML=list.map(a=>{const lvl=a.confidence_level, isNew=seen&&!seen.has(a.id);
++  const clips=JSON.parse(a.clips||'[]');
+   return `<tr class="${isNew?'new':''}"><td>${esc(a.timestamp.replace('T',' '))}</td><td>${num(a.t_session_s,1)} s</td>
+-  <td title="${esc(a.message)}"><b>${esc(a.alert_name)}</b></td><td>${a.track_id}</td>
++  <td>${esc(a.observation_point||'–')}</td>
++  <td title="${esc(a.message)}${a.context_note?'\nContext: '+esc(a.context_note):''}"><b>${esc(a.alert_name)}</b></td><td>${a.track_id}</td>
+   <td><span class="bar"><i class="${lvl}" style="width:${(a.confidence??0)*100}%"></i></span><span class="${lvl}">${num(a.confidence)} ${lvl}</span></td>
+-  <td>${pct(a.positive_ratio)}</td><td>${num(a.duration_s,1)} s</td><td>${esc(a.mode)}</td>
+-  <td>${a.evidence?`<img class="thumb" loading="lazy" src="/evidence/${encodeURI(a.evidence)}" onclick="zoom(this.src)" alt="evidence">`:'<span class="muted">none</span>'}</td>
+-  <td>${a.review?`<span class="tag ${a.review}">${a.review}</span> <button onclick="review(${a.id},null)">undo</button>`
++  <td>${pct(a.positive_ratio)}</td><td>${num(a.duration_s,1)} s</td><td>${a.sightings??1}${(a.sightings??1)>1?' (consolidated)':''}</td><td>${esc(a.mode)}</td>
++  <td>${a.evidence?`<img class="thumb" loading="lazy" src="/evidence/${encodeURI(a.evidence)}" onclick="zoom(this.src)" alt="evidence">`:'<span class="muted">none</span>'}
++   ${clips.map((c,i)=>`<a class="clip" href="#" onclick="zoom('/evidence/${encodeURI(c)}');return false">clip ${i+1}</a>`).join('')}</td>
++  <td class="human">${a.review?`<span class="tag ${a.review}">${a.review}</span> <button onclick="review(${a.id},null)">undo</button>`
+    :`<button class="ok" onclick="review(${a.id},'confirmed')">Confirm</button> <button class="no" onclick="review(${a.id},'dismissed')">Dismiss</button>`}</td></tr>`}).join('')
+-  ||'<tr><td colspan="10" class="empty">No alerts yet &mdash; run python scripts/live.py</td></tr>';
++  ||'<tr><td colspan="12" class="empty">No alerts yet &mdash; run python scripts/live.py</td></tr>';
++ const kinds={arrive:'Arrived at point',leave:'Left point',insufficient_view:'Insufficient view - asked to move'};
++ $('obs').innerHTML=obs.map(o=>`<tr><td>${esc(o.timestamp.replace('T',' '))}</td><td>${num(o.t_session_s,1)} s</td><td>${esc(o.point)}</td><td>${esc(kinds[o.kind]||o.kind)}</td><td class="muted">${esc(o.note)}</td></tr>`).join('')
++  ||'<tr><td colspan="5" class="empty">No robot observations yet</td></tr>';
+  seen=ids;
+ }
+ async function review(id,r){await fetch('/api/review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,review:r})}); await load();}
+-function zoom(src){$('big').src=src; $('modal').style.display='flex';}
++function zoom(src){$('big').src=src+(src.endsWith('.webp')||src.endsWith('.gif')?'?'+Date.now():''); $('modal').style.display='flex';}
+ $('session').onchange=()=>{sig='';seen=null;load()}; $('type').onchange=render;
+ load(); setInterval(load,2000);
+ </script></body></html>"""
+diff --git a/scripts/evaluate_sessions.py b/scripts/evaluate_sessions.py
+new file mode 100644
+index 0000000..4043575
+--- /dev/null
++++ b/scripts/evaluate_sessions.py
+@@ -0,0 +1,115 @@
++"""Evaluate all four methods over complete sessions, with a development / test split.
++
++Rules from the supervisors (Oct 2026):
++  * separate participants or recording sessions between development and testing
++  * keep the final decision thresholds FIXED before looking at the test sessions
++  * report per category: event-level precision and recall, false alerts per recording
++    hour, detection delay, duplicate alerts (+ reviewer effort from the dashboard)
++
++Workflow
++  1. List sessions in data/splits.csv:    session,split,point
++                                          s01,dev,A
++                                          s04,test,B
++  2. Tune on dev only:     python scripts/evaluate_sessions.py --set dev
++     (change thresholds in procta/config.py or a JSON file, re-run, repeat)
++  3. Freeze:               python scripts/evaluate_sessions.py --freeze configs/thresholds_frozen.json
++  4. Test ONCE:            python scripts/evaluate_sessions.py --set test --thresholds configs/thresholds_frozen.json
++
++Each session needs data/detections/<session>.jsonl (extract_detections.py) and
++data/labels/<session>_gt.csv. Output: results/eval_<set>/summary.md + summary.json.
++"""
++
++import argparse
++import csv
++import json
++import sys
++from datetime import datetime
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[1]
++sys.path.insert(0, str(ROOT))
++
++from procta.config import EVENT_TYPES, load_config  # noqa: E402
++from procta.context import ExamContext  # noqa: E402
++from procta.detect import load_detections  # noqa: E402
++from procta.evaluation import COLS, aggregate, evaluate, load_gt  # noqa: E402
++from procta.temporal import MODES, run_policy  # noqa: E402
++
++NAMES = {"frame": "B0 frame-level", "baseline": "B1 3-s persistence",
++         "improved": "Temporal + consolidation", "context": "Temporal + consolidation + context"}
++
++
++def main():
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--splits", default=str(ROOT / "data/splits.csv"))
++    ap.add_argument("--set", choices=["dev", "test", "all"], default="dev")
++    ap.add_argument("--thresholds", default=None)
++    ap.add_argument("--context", default=None)
++    ap.add_argument("--freeze", default=None, help="write the current thresholds to this JSON and exit")
++    ap.add_argument("--tolerance", type=float, default=1.0)
++    args = ap.parse_args()
++
++    cfg = load_config(args.thresholds)
++    if args.freeze:
++        Path(args.freeze).parent.mkdir(parents=True, exist_ok=True)
++        Path(args.freeze).write_text(json.dumps({**cfg.to_dict(), "_frozen_at": datetime.now().isoformat(
++            timespec="seconds")}, indent=1))
++        print(f"Thresholds frozen -> {args.freeze}. Do not change them before the test run.")
++        return
++    if args.set == "test" and not args.thresholds:
++        sys.exit("Test runs must use frozen thresholds: add --thresholds configs/thresholds_frozen.json")
++
++    ctx = ExamContext.load(args.context) if args.context else ExamContext.load()
++    rows = [r for r in csv.DictReader(open(args.splits)) if args.set == "all" or r["split"].strip() == args.set]
++    if not rows:
++        sys.exit(f"No sessions with split={args.set} in {args.splits}")
++
++    per_mode = {m: [] for m in MODES}
++    durations, used, suppressed = [], [], {}
++    for r in rows:
++        s = r["session"].strip()
++        det_f, gt_f = ROOT / "data/detections" / f"{s}.jsonl", ROOT / "data/labels" / f"{s}_gt.csv"
++        if not det_f.exists() or not gt_f.exists():
++            print(f"skip {s}: missing {'detections' if not det_f.exists() else 'labels'}")
++            continue
++        meta, frames = load_detections(det_f)
++        dur = meta.get("duration_s") or frames[-1]["t"]
++        gt = load_gt(gt_f)
++        point = ctx.point(r.get("point", "").strip()) if r.get("point") else None
++        for m in MODES:
++            alerts, _, sig = run_policy(frames, m, cfg, context=ctx, point=point, return_events=True)
++            per_mode[m].append(evaluate([{"event_type": a.event_type, "t_alert": a.t_alert} for a in alerts],
++                                        gt, dur, cfg.persistence_s, args.tolerance, EVENT_TYPES))
++            if m == "context":
++                for k, v in sig.suppressed.items():
++                    suppressed[k] = suppressed.get(k, 0) + v
++        durations.append(dur)
++        used.append(s)
++
++    out = ROOT / "results" / f"eval_{args.set}"
++    out.mkdir(parents=True, exist_ok=True)
++    hours = sum(durations) / 3600
++    md = [f"# Evaluation on {args.set} sessions: {', '.join(used)} ({hours * 60:.1f} min total)\n",
++          f"Thresholds: {args.thresholds or 'procta/config.py defaults (development)'}\n"]
++    summary = {}
++    for m in MODES:
++        res = aggregate(per_mode[m], durations)
++        summary[m] = res
++        md.append(f"### {NAMES[m]} (`{m}`)\n")
++        md.append("| event | " + " | ".join(COLS) + " |")
++        md.append("|---" * (len(COLS) + 1) + "|")
++        for ev, v in res.items():
++            md.append(f"| {ev} | " + " | ".join(f"{v[c]:.2f}" if isinstance(v[c], float) else str(v[c])
++                                                for c in COLS) + " |")
++        md.append("")
++    if suppressed:
++        md.append("Context mode suppressed (frames): " + ", ".join(f"{k}: {v}" for k, v in suppressed.items()))
++    (out / "summary.md").write_text("\n".join(md))
++    (out / "summary.json").write_text(json.dumps({"sessions": used, "duration_s": sum(durations),
++                                                  "thresholds": args.thresholds, "results": summary}, indent=1))
++    print("\n".join(md))
++    print(f"-> {out / 'summary.md'}")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/scripts/live.py b/scripts/live.py
+index dbb8468..73c735c 100644
+--- a/scripts/live.py
++++ b/scripts/live.py
+@@ -1,10 +1,20 @@
+-"""Live webcam demo (replaces procta_live_baseline.py; --mode baseline behaves like it).
++"""Live PROCTA: the camera stands in for the robot's camera on a predefined observation route.
+ 
+-  python scripts/live.py --mode improved            # confidence-aware alerts + evidence snapshots
+-  python scripts/live.py --mode baseline --record   # also save video+timestamps for later evaluation
++  python scripts/live.py --mode context                 # proposed method: temporal + consolidation + exam context
++  python scripts/live.py --mode improved                # temporal confirmation + consolidation, no context
++  python scripts/live.py --mode frame                   # frame-level baseline (B0)
++  python scripts/live.py --mode baseline --record       # 3-s rule (B1), also save the raw video
++  python scripts/live.py --mode context --video data/videos/s04.mp4   # replay a recording as if live
+ 
+-Alert times are seconds since the session started, so a --record'ed session can be
+-evaluated directly with run_offline.py.
++Robot route (configs/exam_context.json -> observation_points). The operator plays the robot:
++  n / p   move to the next / previous permitted observation point (detection re-calibrates)
++  --auto-route   after each point's dwell time the screen asks you to move the camera on
++If the participant cannot be seen clearly for insufficient_view_s, the system logs an
++"insufficient view" observation and asks for the next permitted point - it never alerts on it.
++
++Keys: n/p route, k pose on/off, q quit. Every confirmed event is logged to results/alerts.db
++with timestamp, observation point, image region, a still, and (temporal modes) an evidence clip.
++View and review them with:  python scripts/dashboard.py
+ """
+ 
+ import argparse
+@@ -21,54 +31,145 @@ sys.path.insert(0, str(ROOT))
+ 
+ from procta.alert_log import AlertLog  # noqa: E402
+ from procta.camera import open_camera  # noqa: E402
++from procta.clips import ClipRecorder  # noqa: E402
+ from procta.config import Config  # noqa: E402
++from procta.context import DEFAULT_PATH, ExamContext  # noqa: E402
+ from procta.detect import Detector  # noqa: E402
+ from procta.draw import annotate  # noqa: E402
++from procta.events import EventConsolidator  # noqa: E402
+ from procta.signals import SignalExtractor  # noqa: E402
+-from procta.temporal import make_policy  # noqa: E402
++from procta.temporal import MODES, BaselinePersistence, ConfidenceAwareAlerter, make_policy, signal_mode  # noqa: E402
++
++FACE_OR_HANDS = (0, 1, 2, 9, 10)          # nose, eyes, wrists
++
++
++def clear_view(dets):
++    """At least one person whose face or a wrist is confidently visible."""
++    return any(any(p["kps"][i][2] > 0.3 for i in FACE_OR_HANDS) for p in dets["persons"])
++
++
++def region_of(dets, track_id):
++    p = next((p for p in dets["persons"] if p["id"] == track_id), None)
++    return [round(v) for v in p["box"]] if p else None
++
++
++def draw_temporal(img, pol, t, cfg, x0=None):
++    """The temporal decision, live: one bar per open episode towards the confirmation threshold."""
++    rows = []
++    if isinstance(pol, ConfidenceAwareAlerter):
++        for (tid, ev), ep in pol.eps.items():
++            dur = t - ep.start
++            ratio = ep.on_time / dur if dur > 0 else 1.0
++            rows.append((f"{ev} #{tid}", min(dur / cfg.persistence_s, 1.0), ep.alerted,
++                         f"{dur:.1f}/{cfg.persistence_s:.0f}s on {ratio:.0%}"))
++    elif isinstance(pol, BaselinePersistence):
++        for (tid, ev), st in pol.start.items():
++            dur = t - st
++            rows.append((f"{ev} #{tid}", min(dur / cfg.persistence_s, 1.0), (tid, ev) in pol.alerted,
++                         f"{dur:.1f}/{cfg.persistence_s:.0f}s"))
++    h, w = img.shape[:2]
++    x0 = x0 if x0 is not None else w - 330
++    rows = rows[:6]
++    y = h - 34 - 18 * len(rows)                 # bottom-right, clear of the alert banners
++    for label, frac, confirmed, txt in rows:
++        cv2.rectangle(img, (x0, y - 12), (x0 + 120, y), (80, 80, 80), 1)
++        cv2.rectangle(img, (x0, y - 12), (x0 + int(120 * frac), y), (0, 0, 255) if confirmed else (0, 200, 255), -1)
++        cv2.putText(img, f"{label} {txt}{' CONFIRMED' if confirmed else ''}", (x0 + 126, y - 2),
++                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
++        y += 18
+ 
+ 
+ def main():
+     ap = argparse.ArgumentParser()
+     ap.add_argument("--camera", type=int, default=0)
+-    ap.add_argument("--mode", choices=["frame", "baseline", "improved"], default="improved")
++    ap.add_argument("--mode", choices=list(MODES), default="context")
++    ap.add_argument("--context", default=str(DEFAULT_PATH), help="exam context / route file")
++    ap.add_argument("--start-point", default=None)
++    ap.add_argument("--auto-route", action="store_true", help="prompt to move on after each point's dwell time")
+     ap.add_argument("--record", action="store_true")
+     ap.add_argument("--imgsz", type=int, default=416)
+     ap.add_argument("--det-skip", type=int, default=2)
++    ap.add_argument("--video", default=None, help="replay a video file as if it were the live camera")
++    ap.add_argument("--headless", action="store_true", help="no window (tests / batch replay)")
+     ap.add_argument("--width", type=int, default=1280)
+     ap.add_argument("--height", type=int, default=720)
+     args = ap.parse_args()
+ 
+     cfg = Config(imgsz=args.imgsz, det_frame_skip=args.det_skip,
+                  det_model=str(ROOT / "models/yolov8n.pt"), pose_model=str(ROOT / "models/yolov8n-pose.pt"))
++    ctx = ExamContext.load(args.context)
++    route = ctx.observation_points
++    pi = next((i for i, p in enumerate(route) if p.id == args.start_point), 0)
++
+     started_at = datetime.now()
+     name = f"live_{started_at:%Y%m%d_%H%M%S}_{args.mode}"
+     out = ROOT / "results" / name
+     (out / "evidence").mkdir(parents=True, exist_ok=True)
+ 
+-    cap = open_camera(args.camera, args.width, args.height)
++    if args.video:
++        cap = cv2.VideoCapture(args.video)
++        vfps = cap.get(cv2.CAP_PROP_FPS) or 15
++    else:
++        cap = open_camera(args.camera, args.width, args.height)
+     show_pose = True
+     ok, first = cap.read()
+     alert_log = AlertLog(ROOT / "results/alerts.db", name, args.mode, started_at, args.camera,
+-                         f"{first.shape[1]}x{first.shape[0]}" if ok else "", cfg.to_dict())
+-    det, sig, pol = Detector(cfg), SignalExtractor(cfg, args.mode), make_policy(args.mode, cfg)
++                         f"{first.shape[1]}x{first.shape[0]}" if ok else "",
++                         {**cfg.to_dict(), "exam_context": ctx.to_dict() if args.mode == "context" else None})
++    det = Detector(cfg)
++    sig = SignalExtractor(cfg, signal_mode(args.mode), context=ctx, point=route[pi])
++    pol = make_policy(args.mode, cfg)
++    temporal = args.mode in ("improved", "context")
++    cons = EventConsolidator(ctx.consolidation_window_s) if temporal else None
++    clips = ClipRecorder(out / "evidence") if temporal else None
++    rel = lambda p: Path(p).relative_to(ROOT / "results").as_posix()  # noqa: E731
+ 
+     writer, times = None, []
+     log = open(out / "alerts.csv", "w", newline="")
+     wr = csv.writer(log)
+-    wr.writerow(["track_id", "event_type", "t_alert", "t_start", "confidence", "positive_ratio", "evidence"])
+-    recent = []          # (until_t, text) banners
++    wr.writerow(["track_id", "event_type", "t_alert", "t_start", "confidence", "positive_ratio", "evidence",
++                 "observation_point", "event_id", "sighting"])
++    recent = []                         # (until_t, text) banners
++    current_clip = {}                   # event id -> clip name being recorded
+     start, prev = time.time(), time.time()
+-    alert_log.started_at = datetime.fromtimestamp(start)   # wall clock of t = 0
+-    print(f"Mode={args.mode}. Sit still ~2 s for seat calibration. 'k' = show/hide pose, 'q' = quit. Output -> {out}")
+-    print("Alert log -> results/alerts.db   (view it: python scripts/dashboard.py)")
++    alert_log.started_at = datetime.fromtimestamp(start)
++    arrived, last_clear, insufficient_flagged = 0.0, 0.0, False
++    alert_log.observe(0.0, route[pi].id, "arrive", route[pi].name)
++    print(f"Mode={args.mode}. Point {route[pi].id} ({route[pi].name}). Sit still ~2 s for calibration.")
++    print("Keys: n/p next/previous observation point, k pose, q quit.  Dashboard: python scripts/dashboard.py")
++
++    def end_episodes(closed, t):
++        for key, st, last_on, alerted in closed:
++            if not (alerted and cons):
++                continue
++            ev = cons.on_episode_end(key, last_on, route[pi].id)
++            if ev is None:
++                continue
++            if ev.id in current_clip:
++                clips.stop(current_clip.pop(ev.id), last_on)
++            if ev.log_id:
++                alert_log.update_event(ev.log_id, ev.sightings, ev.t_last_seen)
++
++    def move_to(new_i, t):
++        nonlocal pi, arrived, last_clear, insufficient_flagged
++        end_episodes(pol.flush() if hasattr(pol, "flush") else [], t)
++        alert_log.observe(t, route[pi].id, "leave", f"to {route[new_i].id}")
++        pi = new_i
++        sig.set_point(route[pi])
++        arrived, last_clear, insufficient_flagged = t, t, False
++        alert_log.observe(t, route[pi].id, "arrive", route[pi].name)
++        recent.append((t + 3, f"Robot at point {route[pi].id}: {route[pi].name} - calibrating"))
++        print(f"[{t:7.1f}s] moved to point {route[pi].id} ({route[pi].name})")
++
++    n_frame = 0
+     try:
+         while True:
+             ok, frame = cap.read()
+             if not ok:
+                 break
+             now = time.time()
+-            t = now - start
++            t = n_frame / vfps if args.video else now - start      # video replay uses video time
++            n_frame += 1
+             fps, prev = 1.0 / max(now - prev, 1e-6), now
+             if args.record:
+                 if writer is None:
+@@ -77,41 +178,102 @@ def main():
+                 writer.write(frame)
+                 times.append(t)
+ 
++            point = route[pi]
+             dets = det(frame, t)
+             signals = sig(dets)
+             alerts = pol.step(t, signals, {p["id"] for p in dets["persons"]})
+             img = annotate(frame, dets, signals, show_pose=show_pose)
++
+             for a in alerts:
+-                ev_file = out / "evidence" / f"{a.t_alert:07.1f}s_track{a.track_id}_{a.event_type}.jpg"
++                ev_file = out / "evidence" / f"{a.t_alert:07.1f}s_{point.id}_track{a.track_id}_{a.event_type}.jpg"
+                 cv2.imwrite(str(ev_file), img)
+-                wr.writerow([a.track_id, a.event_type, f"{a.t_alert:.2f}", f"{a.t_start:.2f}",
+-                             a.confidence, a.positive_ratio, ev_file.name])
++                region = region_of(dets, a.track_id)
++                eid, sighting = "", 1
++                if cons is None:
++                    alert_log.add(a, rel(ev_file), point.id, region)
++                else:
++                    ev, is_new = cons.on_alert(a, point.id)
++                    eid, sighting = ev.id, ev.sightings
++                    clip_name = f"ev{ev.id:03d}_s{ev.sightings}_{a.event_type}"
++                    clip_file = clips.start(clip_name, a.t_start)
++                    current_clip[ev.id] = clip_name
++                    if is_new:
++                        note = (f"neighbour side: {point.neighbour_side or '-'}; allowed look: "
++                                f"{', '.join(point.allowed_look_sides) or '-'} ({point.allowed_look_reason})"
++                                if args.mode == "context" else None)
++                        ev.log_id = alert_log.add(a, rel(ev_file), point.id, region,
++                                                  rel(out / "evidence" / clip_file), note)
++                    else:
++                        alert_log.update_event(ev.log_id, ev.sightings, ev.t_last_seen,
++                                               rel(out / "evidence" / clip_file))
++                wr.writerow([a.track_id, a.event_type, f"{a.t_alert:.2f}", f"{a.t_start:.2f}", a.confidence,
++                             a.positive_ratio, ev_file.name, point.id, eid, sighting])
+                 log.flush()
+-                alert_log.add(a, ev_file.relative_to(ROOT / "results").as_posix())
+                 conf = "" if a.confidence != a.confidence else f" (confidence {a.confidence:.2f})"
+-                msg = a.message(datetime.now().strftime("%H:%M:%S"))
+-                recent.append((t + 4, f"track {a.track_id}: {msg}{conf}"))
+-                print(f"[{t:7.1f}s] track {a.track_id}: {msg}{conf}")
++                if sighting > 1:
++                    msg = f"repeated sighting #{sighting} added to event {eid} ({a.event_type})"
++                else:
++                    msg = a.message(datetime.now().strftime("%H:%M:%S"))
++                recent.append((t + 4, f"[{point.id}] {msg}{conf}"))
++                print(f"[{t:7.1f}s] [{point.id}] track {a.track_id}: {msg}{conf}")
++
++            if temporal:
++                end_episodes(pol.closed, t)
++
++            # --- view quality at this observation point
++            if clear_view(dets):
++                last_clear, insufficient_flagged = t, False
++            elif t - last_clear > ctx.insufficient_view_s and t - arrived > ctx.insufficient_view_s and not insufficient_flagged:
++                nxt = route[(pi + 1) % len(route)]
++                alert_log.observe(t, point.id, "insufficient_view",
++                                  f"no clear view for {ctx.insufficient_view_s:.0f}s; next permitted point {nxt.id}")
++                recent.append((t + 6, f"Insufficient view at {point.id} - move to permitted point {nxt.id} (press n)"))
++                print(f"[{t:7.1f}s] insufficient view at {point.id}; suggest point {nxt.id}")
++                insufficient_flagged = True
++            if args.auto_route and len(route) > 1 and t - arrived > point.dwell_s:
++                nxt = route[(pi + 1) % len(route)]
++                cv2.putText(img, f"ROUTE: move camera to point {nxt.id} ({nxt.name}) and press n", (10, 70),
++                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
++
+             recent = [r for r in recent if r[0] > t]
+             img = annotate(frame, dets, signals, [r[1] for r in recent], show_pose=show_pose)
+             for p in dets["persons"]:             # head yaw vs calibration, to tune head_yaw_thr
+                 yaw = sig.head_yaw.get(p["id"])
+                 if yaw is not None:
+                     turned = abs(yaw) > cfg.head_yaw_thr
+-                    cv2.putText(img, f"yaw {yaw:+.2f}", (int(p["box"][0]), int(p["box"][1]) + 18),
++                    cv2.putText(img, f"yaw {yaw:+.2f} ({'image right' if yaw > 0 else 'image left'})",
++                                (int(p["box"][0]), int(p["box"][1]) + 18),
+                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255) if turned else (0, 200, 0), 1)
++            draw_temporal(img, pol, t, cfg)
++            if clips is not None:
++                clips.push(t, img)
+             if not dets["persons"]:
+                 cv2.putText(img, "no person detected - sit further back / more light", (10, img.shape[0] - 35),
+                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+-            cv2.putText(img, f"FPS {fps:.1f}  t={t:.0f}s  mode={args.mode}", (10, img.shape[0] - 10),
+-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+-            cv2.imshow("PROCTA live", img)
+-            key = cv2.waitKey(1) & 0xFF
++            supp = sum(sig.suppressed.values())
++            cv2.putText(img, f"FPS {fps:.1f}  t={t:.0f}s  mode={args.mode}  point {point.id}"
++                             f"{f'  context-suppressed {supp}' if args.mode == 'context' else ''}",
++                        (10, img.shape[0] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
++            if args.headless:
++                key = 255
++            else:
++                cv2.imshow("PROCTA live", img)
++                key = cv2.waitKey(1) & 0xFF
+             if key == ord("q"):
+                 break
+             if key == ord("k"):
+                 show_pose = not show_pose
++            if key in (ord("n"), ord("p")) and len(route) > 1:
++                move_to((pi + (1 if key == ord("n") else -1)) % len(route), t)
+     finally:
++        t_end = n_frame / vfps if args.video else time.time() - start
++        if temporal:
++            end_episodes(pol.flush(), t_end)
++            clips.stop_all(t_end)
++            clips.join()
++        alert_log.observe(t_end, route[pi].id, "leave", "session end")
++        if args.mode == "context" and sig.suppressed:
++            print("Context suppressed:", dict(sig.suppressed))
+         cap.release()
+         log.close()
+         alert_log.close()
+@@ -121,7 +283,8 @@ def main():
+                 w = csv.writer(f)
+                 w.writerow(["frame", "t"])
+                 w.writerows([i, f"{x:.4f}"] for i, x in enumerate(times))
+-        cv2.destroyAllWindows()
++        if not args.headless:
++            cv2.destroyAllWindows()
+         print(f"Saved -> {out}")
+ 
+ 
+diff --git a/scripts/record_session.py b/scripts/record_session.py
+index 9e36a11..dc4181f 100644
+--- a/scripts/record_session.py
++++ b/scripts/record_session.py
+@@ -35,7 +35,7 @@ def main():
+     ap = argparse.ArgumentParser()
+     ap.add_argument("--name", required=True)
+     ap.add_argument("--camera", type=int, default=0)
+-    ap.add_argument("--protocol", default=str(ROOT / "docs/protocol_v1.csv"))
++    ap.add_argument("--protocol", default=str(ROOT / "docs/protocol_v2_solo.csv"))
+     ap.add_argument("--width", type=int, default=1280)
+     ap.add_argument("--height", type=int, default=720)
+     args = ap.parse_args()
+diff --git a/scripts/run_offline.py b/scripts/run_offline.py
+index f047c4f..0cceb2b 100644
+--- a/scripts/run_offline.py
++++ b/scripts/run_offline.py
+@@ -22,7 +22,8 @@ from pathlib import Path
+ ROOT = Path(__file__).resolve().parents[1]
+ sys.path.insert(0, str(ROOT))
+ 
+-from procta.config import Config, EVENT_TYPES  # noqa: E402
++from procta.config import Config, EVENT_TYPES, load_config  # noqa: E402
++from procta.context import ExamContext  # noqa: E402
+ from procta.detect import load_detections  # noqa: E402
+ from procta.evaluation import evaluate, load_gt, to_markdown  # noqa: E402
+ from procta.temporal import MODES, run_policy  # noqa: E402
+@@ -82,19 +83,26 @@ def main():
+     ap.add_argument("--video", default=None)
+     ap.add_argument("--out", default=None)
+     ap.add_argument("--tolerance", type=float, default=1.0)
++    ap.add_argument("--context", default=None, help="exam context file (default configs/exam_context.json)")
++    ap.add_argument("--point", default=None, help="observation point id the session was recorded from")
++    ap.add_argument("--thresholds", default=None, help="frozen thresholds JSON (see evaluate_sessions.py)")
+     args = ap.parse_args()
+ 
+     meta, frames = load_detections(Path(args.detections))
+     session = Path(args.detections).stem
+     out = Path(args.out) if args.out else ROOT / "results" / session
+     out.mkdir(parents=True, exist_ok=True)
+-    cfg = Config()
++    cfg = load_config(args.thresholds)
++    ctx = ExamContext.load(args.context) if args.context else ExamContext.load()
++    point = ctx.point(args.point) if args.point else None
+     duration = meta.get("duration_s") or frames[-1]["t"]
+ 
+     report = [f"# Session `{session}`  ({duration / 60:.1f} min, {len(frames)} frames)\n"]
+     all_metrics = {}
+     for mode in MODES:
+-        alerts = run_policy(frames, mode, cfg)
++        alerts, _, sig = run_policy(frames, mode, cfg, context=ctx, point=point, return_events=True)
++        if mode == "context" and sig.suppressed:
++            print(f"  context suppressed: {dict(sig.suppressed)}")
+         write_alerts(out / f"alerts_{mode}.csv", alerts)
+         print(f"{mode:9s}: {len(alerts)} alerts")
+         if args.gt:
+@@ -106,7 +114,7 @@ def main():
+             files = make_evidence(args.video, frames, alerts, out / "evidence", mode)
+             from procta.review import write_review_page
+             write_review_page(out / f"review_{mode}.html", alerts, files,
+-                              f"PROCTA review - {session} ({mode})", sort_by_confidence=(mode == "improved"))
++                              f"PROCTA review - {session} ({mode})", sort_by_confidence=(mode in ("improved", "context")))
+ 
+     report.append("\nConfig:\n```json\n" + json.dumps(cfg.to_dict(), indent=1) + "\n```\n")
+     (out / "metrics.md").write_text("\n".join(report))
+diff --git a/tests/test_week5.py b/tests/test_week5.py
+new file mode 100644
+index 0000000..f84c8d8
+--- /dev/null
++++ b/tests/test_week5.py
+@@ -0,0 +1,129 @@
++"""Tests for the week-5 additions: exam context, consolidation, clips, robot observation log."""
++
++import sys
++from pathlib import Path
++
++sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
++sys.path.insert(0, str(Path(__file__).resolve().parent))
++
++from procta.config import Config  # noqa: E402
++from procta.context import ExamContext, ObservationPoint, in_zone  # noqa: E402
++from procta.events import EventConsolidator  # noqa: E402
++from procta.signals import SignalExtractor  # noqa: E402
++from procta.temporal import Alert, run_policy  # noqa: E402
++from test_core import _face_person, _person  # noqa: E402
++
++FPS = 10
++
++
++def _ctx(neighbour="left", allowed=("right",), zones=(), devices=()):
++    pt = ObservationPoint("A", neighbour_side=neighbour, allowed_look_sides=list(allowed), ignore_zones=list(zones))
++    return ExamContext(permitted_devices=list(devices), observation_points=[pt]), pt
++
++
++def _head_frames(cfg, dx, n):
++    return [_face_person(1, 0)] * cfg.calibration_frames + [_face_person(1, dx)] * n
++
++
++def test_default_context_file_loads():
++    ctx = ExamContext.load()
++    assert len(ctx.observation_points) >= 1 and "cell phone" not in ctx.permitted_devices
++
++
++def test_context_keeps_neighbour_turn_drops_clock_turn():
++    cfg = Config()
++    ctx, pt = _ctx(neighbour="left", allowed=("right",))
++    for dx, expect in ((-16, True), (16, False)):          # nose to image left = towards neighbour
++        sig = SignalExtractor(cfg, "context", context=ctx, point=pt)
++        out = [sig({"t": i / FPS, "persons": [p], "phones": []}) for i, p in enumerate(_head_frames(cfg, dx, 5))]
++        assert ((1, "head_turned") in out[-1]) is expect
++    imp = SignalExtractor(cfg, "improved")                 # without context every turn counts
++    out = [imp({"t": i / FPS, "persons": [p], "phones": []}) for i, p in enumerate(_head_frames(cfg, 16, 5))]
++    assert (1, "head_turned") in out[-1]
++
++
++def test_context_ignore_zone_and_permitted_device():
++    person = _person(1, [0, 0, 200, 400], (150, 300))
++    phone = {"box": [140, 290, 170, 330], "conf": 0.7}
++    frame = {"t": 0.0, "wh": [640, 480], "persons": [person], "phones": [phone]}
++    ctx, pt = _ctx(zones=[[0.0, 0.5, 0.5, 1.0]])           # phone centre (0.24, 0.64) is inside
++    assert SignalExtractor(Config(), "context", context=ctx, point=pt)(frame) == {}
++    ctx2, pt2 = _ctx(devices=["cell phone"])
++    sig = SignalExtractor(Config(), "context", context=ctx2, point=pt2)
++    assert sig(frame) == {} and sig.suppressed["phone permitted by exam rules"] == 1
++    assert in_zone([0, 0, 10, 10], [], [640, 480]) is False
++
++
++def test_consolidation_merges_repeats_within_window():
++    c = EventConsolidator(window_s=30)
++    e1, new1 = c.on_alert(Alert(1, "phone_in_hand", 13, 10, 0.8, 1.0), "A")
++    c.on_episode_end((1, "phone_in_hand"), 18, "A")
++    e2, new2 = c.on_alert(Alert(7, "phone_in_hand", 26, 23, 0.9, 1.0), "A")   # new track id, 5 s later
++    e3, new3 = c.on_alert(Alert(7, "phone_in_hand", 90, 87, 0.9, 1.0), "A")   # 60 s later -> new event
++    e4, new4 = c.on_alert(Alert(7, "phone_in_hand", 95, 92, 0.9, 1.0), "B")   # other point -> new event
++    assert new1 and not new2 and e2 is e1 and e1.sightings == 2 and e1.track_ids == {1, 7}
++    assert new3 and new4 and len(c.events) == 3 and e1.confidence == 0.9
++
++
++def _phone_frames(pattern):
++    """pattern of 0/1 per frame: phone in the right hand or no phone."""
++    person = _person(1, [0, 0, 200, 400], (150, 300))
++    phone = {"box": [140, 290, 170, 330], "conf": 0.7}
++    return [{"t": i / FPS, "persons": [person], "phones": [phone] if on else []} for i, on in enumerate(pattern)]
++
++
++def test_repeated_sighting_is_one_record_in_temporal_modes_two_in_b1():
++    pat = [0] * 40 + [1] * 60 + [0] * 50 + [1] * 60 + [0] * 30          # 6 s, 5 s away, 6 s
++    frames = _phone_frames(pat)
++    cfg = Config()
++    b1 = [a for a in run_policy(frames, "baseline", cfg) if a.event_type == "phone_in_hand"]
++    imp, events, _ = run_policy(frames, "improved", cfg, return_events=True)
++    imp = [a for a in imp if a.event_type == "phone_in_hand"]
++    assert len(b1) == 2 and len(imp) == 1
++    ev = next(e for e in events if e.event_type == "phone_in_hand")
++    assert ev.sightings == 2
++
++
++def test_aggregate_sums_sessions():
++    from procta.evaluation import aggregate, evaluate
++    gt = [{"event_type": "phone_in_hand", "start_s": 10, "end_s": 20}]
++    r1 = evaluate([{"event_type": "phone_in_hand", "t_alert": 13}], gt, 1800, 3.0, 1.0, ["phone_in_hand"])
++    r2 = evaluate([{"event_type": "phone_in_hand", "t_alert": 50}], gt, 1800, 3.0, 1.0, ["phone_in_hand"])
++    a = aggregate([r1, r2], [1800, 1800])["phone_in_hand"]
++    assert a["alerts"] == 2 and a["detected"] == 1 and a["target_episodes"] == 2
++    assert a["false_alerts_per_hour"] == 1.0 and a["recall"] == 0.5
++
++
++def test_alert_log_consolidation_and_observations(tmp_path):
++    import json
++    from datetime import datetime
++    from procta.alert_log import AlertLog, connect
++    log = AlertLog(tmp_path / "a.db", "live_x", "context", datetime(2026, 10, 22, 10, 0, 0))
++    rid = log.add(Alert(1, "phone_in_hand", 13.0, 10.0, 0.8, 1.0), "e.jpg", "A", [0, 0, 10, 10], "c1.webp")
++    log.update_event(rid, 2, 30.0, "c2.webp")
++    log.observe(40.0, "A", "insufficient_view", "next permitted point B")
++    log.close()
++    con = connect(tmp_path / "a.db")
++    r = dict(con.execute("SELECT * FROM alerts").fetchone())
++    assert r["sightings"] == 2 and json.loads(r["clips"]) == ["c1.webp", "c2.webp"] and r["observation_point"] == "A"
++    o = dict(con.execute("SELECT * FROM observations").fetchone())
++    assert o["kind"] == "insufficient_view" and o["timestamp"] == "2026-10-22T10:00:40"
++
++
++def test_clip_recorder_writes_preroll_clip(tmp_path):
++    import numpy as np
++    from procta.clips import ClipRecorder
++    rec = ClipRecorder(tmp_path, pre_s=3, post_s=0.5, fps=5, width=64)
++    for i in range(50):                        # 10 s at 5 fps
++        t = i / 5
++        rec.push(t, np.full((48, 64, 3), i * 5 % 255, np.uint8))
++        if t == 4.0:
++            rec.start("ev001_s1", t_from=2.0)  # confirmed at 4 s, behaviour started at 2 s
++        if t == 6.0:
++            rec.stop("ev001_s1", 6.0)
++    rec.join()
++    assert (tmp_path / "ev001_s1.mp4").exists()
++    assert (tmp_path / "ev001_s1.webp").exists() or (tmp_path / "ev001_s1.gif").exists()
++    import cv2
++    n = int(cv2.VideoCapture(str(tmp_path / "ev001_s1.mp4")).get(cv2.CAP_PROP_FRAME_COUNT))
++    assert 25 <= n <= 30                        # from 1 s before the start (t=1.0) to stop + 0.5 s (t=6.5)
+-- 
+2.43.0
+
