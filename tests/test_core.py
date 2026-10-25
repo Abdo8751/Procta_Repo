@@ -150,3 +150,21 @@ def test_alert_log_records_detailed_alert(tmp_path):
     assert r["timestamp"] == "2026-10-12T13:50:13" and r["alert_name"] == "Head turned away"
     assert r["confidence_level"] == "High" and r["duration_s"] == 3.0 and r["review"] is None
     assert "13:50:13" in r["message"]
+
+
+def test_delete_alert_and_session(tmp_path):
+    from datetime import datetime
+    from procta.alert_log import AlertLog, connect, delete_alert, delete_session
+    from procta.temporal import Alert
+    db = tmp_path / "a.db"
+    for s in ("s1", "s2"):
+        log = AlertLog(db, s, "improved", datetime(2026, 10, 14, 9, 0, 0))
+        log.add(Alert(1, "head_turned", 5.0, 2.0, 0.9, 1.0))
+        log.add(Alert(1, "phone_in_hand", 9.0, 6.0, 0.8, 1.0))
+        log.close()
+    con = connect(db)
+    first = con.execute("SELECT id FROM alerts WHERE session='s1' ORDER BY id").fetchone()[0]
+    assert delete_alert(con, first) == 1
+    assert delete_session(con, "s2") == 2
+    assert [r[0] for r in con.execute("SELECT session FROM alerts")] == ["s1"]
+    assert con.execute("SELECT deleted FROM sessions WHERE session='s2'").fetchone()[0] == 1

@@ -5,7 +5,7 @@ SQLite rather than CSV: Excel locks an open CSV on Windows, which would make liv
 logging fail mid-session. Use the dashboard's "Download CSV" for spreadsheets.
 
 Tables
-  sessions(session, mode, started_at, ended_at, camera, resolution, config_json)
+  sessions(session, mode, started_at, ended_at, camera, resolution, config_json, deleted)
   alerts(id, session, mode, timestamp, t_session_s, track_id, event_type, alert_name,
          message, confidence, confidence_level, positive_ratio, episode_start_s,
          duration_s, evidence, review, reviewed_at)
@@ -26,7 +26,7 @@ EVENT_NAMES = {"phone_in_hand": "Phone in hand", "phone_on_desk": "Phone on desk
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
     session TEXT PRIMARY KEY, mode TEXT, started_at TEXT, ended_at TEXT,
-    camera INTEGER, resolution TEXT, config_json TEXT);
+    camera INTEGER, resolution TEXT, config_json TEXT, deleted INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS alerts (
     id INTEGER PRIMARY KEY AUTOINCREMENT, session TEXT, mode TEXT, timestamp TEXT,
     t_session_s REAL, track_id INTEGER, event_type TEXT, alert_name TEXT, message TEXT,
@@ -58,15 +58,33 @@ def connect(db_path):
     for col, typ in NEW_ALERT_COLUMNS.items():
         if col not in have:
             con.execute(f"ALTER TABLE alerts ADD COLUMN {col} {typ}")
+    if "deleted" not in {r[1] for r in con.execute("PRAGMA table_info(sessions)")}:   # older db files
+        con.execute("ALTER TABLE sessions ADD COLUMN deleted INTEGER DEFAULT 0")
     con.commit()
     return con
+
+
+def delete_alert(con, alert_id):
+    with con:
+        return con.execute("DELETE FROM alerts WHERE id=?", (int(alert_id),)).rowcount
+
+
+def delete_session(con, session):
+    """Remove a session's alerts and robot observations from the log. The session row is kept,
+    marked deleted, so the dashboard does not re-import it from results/live_*/alerts.csv."""
+    with con:
+        n = con.execute("DELETE FROM alerts WHERE session=?", (session,)).rowcount
+        con.execute("DELETE FROM observations WHERE session=?", (session,))
+        con.execute("UPDATE sessions SET deleted=1 WHERE session=?", (session,))
+    return n
 
 
 class AlertLog:
     def __init__(self, db_path, session, mode, started_at: datetime, camera=None, resolution="", config=None):
         self.con, self.session, self.mode, self.started_at = connect(db_path), session, mode, started_at
         with self.con:
-            self.con.execute("INSERT OR REPLACE INTO sessions VALUES (?,?,?,?,?,?,?)",
+            self.con.execute("INSERT OR REPLACE INTO sessions (session, mode, started_at, ended_at, camera,"
+                             " resolution, config_json) VALUES (?,?,?,?,?,?,?)",
                              (session, mode, started_at.isoformat(timespec="seconds"), None, camera,
                               resolution, json.dumps(config or {})))
 

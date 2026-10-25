@@ -11,7 +11,7 @@ Events: `phone_in_hand`, `phone_on_desk`, `body_movement`, `unusual_seat_movemen
 ```bash
 python -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-python -m pytest -q                                     # 13 tests
+python -m pytest -q                                     # 14 tests
 ```
 YOLOv8 weights download automatically on first run (or put them in `models/`).
 

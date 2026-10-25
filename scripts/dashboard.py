@@ -21,7 +21,7 @@ from urllib.parse import parse_qs, urlparse
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from procta.alert_log import connect, import_live_dirs  # noqa: E402
+from procta.alert_log import connect, delete_alert, delete_session, import_live_dirs  # noqa: E402
 
 RESULTS = ROOT / "results"
 DB = RESULTS / "alerts.db"
@@ -56,7 +56,7 @@ def query_sessions():
     con = connect(DB)
     rows = [dict(r) for r in con.execute(
         "SELECT s.session, s.mode, s.started_at, s.ended_at, s.resolution, COUNT(a.id) AS n_alerts"
-        " FROM sessions s LEFT JOIN alerts a ON a.session = s.session"
+        " FROM sessions s LEFT JOIN alerts a ON a.session = s.session WHERE NOT s.deleted"
         " GROUP BY s.session ORDER BY s.started_at DESC")]
     con.close()
     for r in rows:
@@ -103,9 +103,15 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(b"not found", "text/plain", 404)
 
     def do_POST(self):
-        if urlparse(self.path).path != "/api/review":
-            return self._send(b"not found", "text/plain", 404)
+        path = urlparse(self.path).path
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
+        if path in ("/api/delete", "/api/delete_session"):
+            con = connect(DB)
+            n = delete_alert(con, body["id"]) if path == "/api/delete" else delete_session(con, body["session"])
+            con.close()
+            return self._send(json.dumps({"ok": True, "deleted": n}))
+        if path != "/api/review":
+            return self._send(b"not found", "text/plain", 404)
         decision = body.get("review")
         if decision not in ("confirmed", "dismissed", None):
             return self._send(json.dumps({"error": "bad review"}), code=400)
@@ -149,7 +155,7 @@ tr.new td{animation:hl 3s} @keyframes hl{from{background:rgba(255,200,0,.25)}}
 .bar i{display:block;height:100%} .High{color:var(--high)} .Medium{color:var(--med)} .Low{color:var(--low)}
 .bar .High{background:var(--high)} .bar .Medium{background:var(--med)} .bar .Low{background:var(--low)}
 img.thumb{height:44px;border-radius:4px;cursor:zoom-in;display:block}
-button.ok{border-color:var(--ok);color:var(--ok)} button.no{border-color:var(--no);color:var(--no)}
+button.del{border-color:var(--low);color:var(--low)} button.ok{border-color:var(--ok);color:var(--ok)} button.no{border-color:var(--no);color:var(--no)}
 .tag{padding:2px 8px;border-radius:10px;font-size:12px;border:1px solid currentColor}
 .confirmed{color:var(--ok)} .dismissed{color:var(--no)}
 #modal{position:fixed;inset:0;background:rgba(0,0,0,.8);display:none;align-items:center;justify-content:center;padding:16px}
@@ -160,6 +166,7 @@ th.human,td.human{border-left:2px solid var(--accent)} a.clip{margin-right:6px;f
  <label>Session <select id="session"><option value="">All sessions</option></select></label>
  <label>Alert <select id="type"><option value="">All types</option></select></label>
  <a class="btn" id="csv" href="/api/export.csv">Download CSV</a>
+ <button class="del" id="delsess" style="display:none" onclick="delSession()">Delete session</button>
  <span class="live"><span class="dot" id="dot"></span><span id="livetxt">idle</span></span>
  <div class="note">Alerts are prompts for human review only &mdash; the system never decides that a student cheated.
  Confidence = detector confidence &times; how consistently the behaviour was seen. Accuracy = confirmed &divide; reviewed.</div>
@@ -176,9 +183,9 @@ th.human,td.human{border-left:2px solid var(--accent)} a.clip{margin-right:6px;f
  <div class="wrap"><table><thead><tr><th>Alert</th><th>Count</th><th>Avg confidence</th><th>Confirmed</th><th>Dismissed</th><th>Not reviewed</th><th>Accuracy</th></tr></thead><tbody id="types"></tbody></table></div>
  <h2>Alerts (newest first)</h2>
  <div class="wrap"><table><thead>
-  <tr><th colspan="11" class="grp">Automatic detection (what the system observed)</th><th class="grp human">Invigilator decision</th></tr>
+  <tr><th colspan="11" class="grp">Automatic detection (what the system observed)</th><th class="grp human">Invigilator decision</th><th class="grp"></th></tr>
   <tr><th>Time</th><th>Session time</th><th>Point</th><th>Event</th><th>Track</th><th>Confidence</th>
-  <th>Consistency</th><th>Lasted before alert</th><th>Sightings</th><th>Mode</th><th>Evidence</th><th class="human">Review</th></tr></thead><tbody id="rows"></tbody></table></div>
+  <th>Consistency</th><th>Lasted before alert</th><th>Sightings</th><th>Mode</th><th>Evidence</th><th class="human">Review</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>
  <h2>Robot observation log</h2>
  <div class="wrap"><table><thead><tr><th>Time</th><th>Session time</th><th>Point</th><th>What happened</th><th>Note</th></tr></thead><tbody id="obs"></tbody></table></div>
 </main>
@@ -201,6 +208,7 @@ function render(){
  sel.value=cur;
  const running=sessions.filter(x=>x.ended_at===null);
  $('dot').className='dot'+(running.length?' on':''); $('livetxt').textContent=running.length?'live session running':'no live session';
+ $('delsess').style.display=cur?'':'none';
  $('csv').href='/api/export.csv'+(cur?'?session='+encodeURIComponent(cur):'');
  const tsel=$('type'), tcur=tsel.value, names=[...new Set(alerts.map(a=>a.alert_name))].sort();
  tsel.innerHTML='<option value="">All types</option>'+names.map(n=>`<option>${esc(n)}</option>`).join(''); tsel.value=tcur;
@@ -228,14 +236,26 @@ function render(){
   <td>${a.evidence?`<img class="thumb" loading="lazy" src="/evidence/${encodeURI(a.evidence)}" onclick="zoom(this.src)" alt="evidence">`:'<span class="muted">none</span>'}
    ${clips.map((c,i)=>`<a class="clip" href="#" onclick="zoom('/evidence/${encodeURI(c)}');return false">clip ${i+1}</a>`).join('')}</td>
   <td class="human">${a.review?`<span class="tag ${a.review}">${a.review}</span> <button onclick="review(${a.id},null)">undo</button>`
-   :`<button class="ok" onclick="review(${a.id},'confirmed')">Confirm</button> <button class="no" onclick="review(${a.id},'dismissed')">Dismiss</button>`}</td></tr>`}).join('')
-  ||'<tr><td colspan="12" class="empty">No alerts yet &mdash; run python scripts/live.py</td></tr>';
+   :`<button class="ok" onclick="review(${a.id},'confirmed')">Confirm</button> <button class="no" onclick="review(${a.id},'dismissed')">Dismiss</button>`}</td>
+  <td><button class="del" title="Delete this alert" onclick="delAlert(${a.id})">Delete</button></td></tr>`}).join('')
+  ||'<tr><td colspan="13" class="empty">No alerts yet &mdash; run python scripts/live.py</td></tr>';
  const kinds={arrive:'Arrived at point',leave:'Left point',insufficient_view:'Insufficient view - asked to move'};
  $('obs').innerHTML=obs.map(o=>`<tr><td>${esc(o.timestamp.replace('T',' '))}</td><td>${num(o.t_session_s,1)} s</td><td>${esc(o.point)}</td><td>${esc(kinds[o.kind]||o.kind)}</td><td class="muted">${esc(o.note)}</td></tr>`).join('')
   ||'<tr><td colspan="5" class="empty">No robot observations yet</td></tr>';
  seen=ids;
 }
 async function review(id,r){await fetch('/api/review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,review:r})}); await load();}
+async function post(url,body){await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); sig=''; await load();}
+function delAlert(id){const a=alerts.find(x=>x.id===id);
+ if(confirm(`Delete this alert?
+
+${a.alert_name} at ${a.timestamp.replace('T',' ')}
+
+This cannot be undone.`)) post('/api/delete',{id});}
+function delSession(){const s=$('session').value, n=alerts.length;
+ if(s&&confirm(`Delete session ${s} and all ${n} of its alerts from the log?
+
+This cannot be undone.`)){$('session').value=''; post('/api/delete_session',{session:s});}}
 function zoom(src){$('big').src=src+(src.endsWith('.webp')||src.endsWith('.gif')?'?'+Date.now():''); $('modal').style.display='flex';}
 $('session').onchange=()=>{sig='';seen=null;load()}; $('type').onchange=render;
 load(); setInterval(load,2000);
