@@ -40,6 +40,12 @@ def annotate(frame, dets: dict, signals: dict = None, banner_lines=(), show_pose
         cv2.putText(img, label, (x1, max(12, y1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 0), 1)
         if show_pose:
             draw_pose(img, p["kps"])
+    for o in dets.get("objects", []):          # world detector: calculators / books (paper is everywhere)
+        if o["cls"] in ("calculator", "book"):
+            x1, y1, x2, y2 = map(int, o["box"])
+            cv2.rectangle(img, (x1, y1), (x2, y2), (0, 165, 255), 2)
+            cv2.putText(img, f"{o['cls']} {o['conf']:.2f}", (x1, max(12, y1 - 6)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 1)
     for ph in dets["phones"]:
         x1, y1, x2, y2 = map(int, ph["box"])
         cv2.rectangle(img, (x1, y1), (x2, y2), (0, 0, 255), 2)

@@ -32,10 +32,47 @@ with `python scripts/label_video.py --video data/videos/<session>.mp4`.
 | Uncertain / occluded | Face partly covered by a hand, head turned away from the camera; label with note `occluded`. |
 | Repeated sightings | Several looks at the neighbour desk with short breaks (< 30 s) = **one** labelled event (note `repeat`). |
 
+## Category 3 - possible looking below the desk (`looking_down`)
+
+| | Definition |
+|---|---|
+| Observable criteria | Head lowered clearly further than in the participant's own writing pose AND the hands are off the desk (below the desk edge / in the lap / not visible), e.g. looking at something on the lap or under the desk. |
+| Start | Head drops below the writing pose with the hands off the desk. |
+| End | Head back in the writing pose or hands back on the desk. |
+| Target event | Held for at least 3 s. |
+| Normal lookalikes (`lookalike_*`) | **Writing or reading one's own paper** (head down, hands on the desk) - this is the normal exam posture; picking up a dropped pen < 3 s; looking at a permitted calculator on the desk. |
+| Uncertain / occluded | Face hidden by hair or a hand; label with note `occluded`. |
+| Repeated sightings | Several looks down with breaks < 30 s = one event (note `repeat`). |
+
+## Category 4 - possible exchange of material (`material_exchange`)
+
+| | Definition |
+|---|---|
+| Observable criteria | Two **different** participants' hands meet between their desks (same row or front <-> back row), with or without a visible sheet / object being passed. |
+| Start | First frame the two hands are within reach of each other between the desks. |
+| End | Hands separate. |
+| Target event | At least **1 s** (exchanges are short; the 3-s rule would miss them). |
+| Seat column | Both seats, joined with `+` in alphabetical order, e.g. `B1+F1`. |
+| Normal lookalikes (`lookalike_*`) | **Authorised exchange**: handing a paper to or from the invigilator; borrowing nothing, just stretching; hands near each other on a shared desk while writing. |
+| Uncertain / occluded | One of the hands hidden; label with note `occluded` if the exchange is still clear. |
+
+## Group sessions (6 participants, fixed camera: Test_1)
+
+- Seats: front row `F1 F2 F3`, back row `B1 B2 B3`, numbered left to right **in the camera image**
+  (configs/exam_context.json, point `T1`; draw the zones with `scripts/define_seats.py`).
+- Ground truth gets a seat column: `event_type,start_s,end_s,seat,note`. An alert only counts as correct
+  when type AND seat match. The invigilator is seat `INV`.
+- Lookalike labels used in group sessions: `lookalike_calculator` (calculator in hand / on desk),
+  `lookalike_clock` (looking at the wall clock / invigilator), `lookalike_authorised_exchange`.
+
 ## Not events, logged separately
 
 - `insufficient_view`: the participant cannot be seen clearly (back to the camera, out of frame). The
   robot logs it and moves to the next permitted observation point; it is never an alert.
+- `permitted_device` (context mode): a permitted calculator in a participant's hand is logged in the
+  observation log, never alerted. With `object_detector="world"` calculators are told apart from phones
+  by YOLO-World + CLIP; with the original COCO detector they often become `phone_in_hand`.
+- `authorised_exchange` (context mode): material passed with the invigilator is logged, not alerted.
 
 ## Room set-up for solo recordings (protocol `docs/protocol_v2_solo.csv`)
 

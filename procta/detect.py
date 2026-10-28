@@ -1,4 +1,10 @@
-"""Perception layer: YOLOv8 phone detection + YOLOv8-pose person tracking.
+"""Perception layer: phone / object detection + YOLOv8-pose person tracking.
+
+object_detector="coco":  YOLOv8n 'cell phone' class only (original; calculators become phones).
+object_detector="world": YOLO-World (open vocabulary) proposes cell phones, calculators, sheets
+                         of paper and books; every phone/calculator box is verified by CLIP
+                         (procta/verify.py). Output: "phones" (verified only, for the phone
+                         events) and "objects" (everything, incl. calculators and paper).
 
 Output of one frame is a plain dict, so a whole video can be cached to JSONL once
 and then replayed through any alerting policy (baseline, improved, parameter
@@ -23,21 +29,64 @@ class Detector:
         def weights(p):
             return p if Path(p).exists() else Path(p).name
 
-        self.det = YOLO(weights(cfg.det_model))
+        self.world = cfg.object_detector == "world"
+        if self.world:
+            from ultralytics import YOLOWorld
+            from .verify import ClipVerifier
+            self.det = YOLOWorld(weights(cfg.world_model))
+            self.det.set_classes(list(cfg.world_classes))
+            self.verifier = ClipVerifier()
+        else:
+            self.det = YOLO(weights(cfg.det_model))
         self.pose = YOLO(weights(cfg.pose_model))
         self._frame_idx = 0
         self._cached_phones = []
+        self._cached_objects = []
+
+    def _world_objects(self, frame, t):
+        cfg = self.cfg
+        r = self.det.predict(frame, conf=cfg.world_conf, imgsz=cfg.det_imgsz or cfg.imgsz, verbose=False)[0]
+        cands = []                            # merge boxes that got several class names
+        if r.boxes is not None:
+            for xyxy, c, s in zip(r.boxes.xyxy.cpu().numpy(), r.boxes.cls.cpu().numpy(), r.boxes.conf.cpu().numpy()):
+                box, name, s = [round(float(v), 1) for v in xyxy], r.names[int(c)], float(s)
+                same = next((o for o in cands if _iou(o["box"], box) > 0.6), None)
+                if same is None:
+                    cands.append({"box": box, "det": {name: round(s, 3)}})
+                else:
+                    same["det"][name] = max(same["det"].get(name, 0.0), round(s, 3))
+        objects, verify = [], []
+        for o in cands:
+            if "cell phone" in o["det"] or "calculator" in o["det"]:
+                verify.append(o)
+            else:
+                name = max(o["det"], key=o["det"].get)
+                objects.append({"cls": "paper" if name == "sheet of paper" else name, "box": o["box"],
+                                "conf": o["det"][name], "det": o["det"]})
+        from .verify import decide
+        for o, (_, probs) in zip(verify, self.verifier.classify(frame, [o["box"] for o in verify], t)):
+            d = decide(probs, cfg.clip_phone_min)
+            if d is None:
+                continue                      # pencil case, pen, hand: not an exam-relevant object
+            cls, conf = d
+            objects.append({"cls": cls, "box": o["box"], "conf": round(conf, 3), "det": o["det"], "clip": probs})
+        return objects
 
     def __call__(self, frame, t: float) -> dict:
         cfg = self.cfg
         if self._frame_idx % cfg.det_frame_skip == 0:
-            r = self.det.predict(frame, classes=[PHONE_CLASS_ID], conf=cfg.phone_conf,
-                                 imgsz=cfg.det_imgsz or cfg.imgsz, verbose=False)[0]
-            phones = []
-            if r.boxes is not None:
-                for xyxy, conf in zip(r.boxes.xyxy.cpu().numpy(), r.boxes.conf.cpu().numpy()):
-                    phones.append({"box": [round(float(v), 1) for v in xyxy], "conf": round(float(conf), 3)})
-            self._cached_phones = phones
+            if self.world:
+                objects = self._world_objects(frame, t)
+                phones = [{"box": o["box"], "conf": o["conf"]} for o in objects if o["cls"] == "cell phone"]
+            else:
+                r = self.det.predict(frame, classes=[PHONE_CLASS_ID], conf=cfg.phone_conf,
+                                     imgsz=cfg.det_imgsz or cfg.imgsz, verbose=False)[0]
+                phones = []
+                if r.boxes is not None:
+                    for xyxy, conf in zip(r.boxes.xyxy.cpu().numpy(), r.boxes.conf.cpu().numpy()):
+                        phones.append({"box": [round(float(v), 1) for v in xyxy], "conf": round(float(conf), 3)})
+                objects = [{"cls": "cell phone", **p} for p in phones]
+            self._cached_phones, self._cached_objects = phones, objects
         self._frame_idx += 1
 
         p = self.pose.track(frame, persist=True, classes=[PERSON_CLASS_ID], imgsz=cfg.imgsz,
@@ -59,7 +108,16 @@ class Detector:
                             for (x, y), c in zip(kxy[i], kconf[i])],
                 })
         h, w = frame.shape[:2]
-        return {"t": round(t, 4), "wh": [w, h], "persons": persons, "phones": list(self._cached_phones)}
+        return {"t": round(t, 4), "wh": [w, h], "persons": persons, "phones": list(self._cached_phones),
+                "objects": list(self._cached_objects)}
+
+
+def _iou(a, b):
+    ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+    iy = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+    inter = ix * iy
+    u = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
+    return inter / u if u > 0 else 0.0
 
 
 def save_detections(path: Path, meta: dict, frames: list):

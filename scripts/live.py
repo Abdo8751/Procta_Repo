@@ -64,13 +64,13 @@ def draw_temporal(img, pol, t, cfg, x0=None):
         for (tid, ev), ep in pol.eps.items():
             dur = t - ep.start
             ratio = ep.on_time / dur if dur > 0 else 1.0
-            rows.append((f"{ev} #{tid}", min(dur / cfg.persistence_s, 1.0), ep.alerted,
-                         f"{dur:.1f}/{cfg.persistence_s:.0f}s on {ratio:.0%}"))
+            p = cfg.persistence_for(ev)
+            rows.append((f"{ev} #{tid}", min(dur / p, 1.0), ep.alerted, f"{dur:.1f}/{p:.0f}s on {ratio:.0%}"))
     elif isinstance(pol, BaselinePersistence):
         for (tid, ev), st in pol.start.items():
             dur = t - st
-            rows.append((f"{ev} #{tid}", min(dur / cfg.persistence_s, 1.0), (tid, ev) in pol.alerted,
-                         f"{dur:.1f}/{cfg.persistence_s:.0f}s"))
+            p = cfg.persistence_for(ev)
+            rows.append((f"{ev} #{tid}", min(dur / p, 1.0), (tid, ev) in pol.alerted, f"{dur:.1f}/{p:.0f}s"))
     h, w = img.shape[:2]
     x0 = x0 if x0 is not None else w - 330
     rows = rows[:6]
@@ -94,6 +94,8 @@ def main():
     ap.add_argument("--imgsz", type=int, default=416)
     ap.add_argument("--det-skip", type=int, default=2)
     ap.add_argument("--det-imgsz", type=int, default=0, help="object detector input size (0 = --imgsz)")
+    ap.add_argument("--object-detector", choices=["coco", "world"], default="coco",
+                    help="world = YOLO-World + CLIP: tells phones from calculators (slower)")
     ap.add_argument("--stride", type=int, default=1, help="--video only: process every Nth frame (video time kept)")
     ap.add_argument("--video", default=None, help="replay a video file as if it were the live camera")
     ap.add_argument("--headless", action="store_true", help="no window (tests / batch replay)")
@@ -102,6 +104,7 @@ def main():
     args = ap.parse_args()
 
     cfg = Config(imgsz=args.imgsz, det_imgsz=args.det_imgsz, det_frame_skip=args.det_skip,
+                 object_detector=args.object_detector, world_model=str(ROOT / "models/yolov8s-worldv2.pt"),
                  det_model=str(ROOT / "models/yolov8n.pt"), pose_model=str(ROOT / "models/yolov8n-pose.pt"))
     ctx = ExamContext.load(args.context)
     # robot route = points marked on_route; a fixed viewpoint (e.g. a recorded room with seat
@@ -170,6 +173,7 @@ def main():
         print(f"[{t:7.1f}s] moved to point {route[pi].id} ({route[pi].name})")
 
     n_frame = 0
+    last_note = {}                      # (identity, kind) -> time of the last logged context note
     stride, paused, last_img = max(1, args.stride), False, None
     n_total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) if args.video else 0
 
@@ -283,6 +287,14 @@ def main():
             if temporal:
                 end_episodes(pol.closed, t)
 
+            # --- context notes: logged in the observation log, never alerted (one per person per 30 s)
+            for nt, who, kind, text in sig.notes:
+                if nt - last_note.get((who, kind), -1e9) >= 30:
+                    last_note[(who, kind)] = nt
+                    alert_log.observe(nt, point.id, kind, f"{who}: {text}")
+                    print(f"[{nt:7.1f}s] [{point.id}] note {who}: {text}")
+            sig.notes.clear()
+
             # --- view quality at this observation point
             if clear_view(dets):
                 last_clear, insufficient_flagged = t, False
@@ -301,13 +313,19 @@ def main():
             recent = [r for r in recent if r[0] > t]
             img = annotate(frame, dets, signals, [r[1] for r in recent], show_pose=show_pose,
                            seat_zones=point.seat_zones)
-            for p in dets["persons"]:             # head yaw vs calibration, to tune head_yaw_thr
-                yaw = sig.head_yaw.get(p.get("key", p["id"]))
+            for p in dets["persons"]:             # head yaw / pitch vs calibration, to tune the thresholds
+                who = p.get("key", p["id"])
+                yaw, pitch = sig.head_yaw.get(who), sig.head_pitch.get(who)
                 if yaw is not None:
                     turned = abs(yaw) > cfg.head_yaw_thr
                     cv2.putText(img, f"yaw {yaw:+.2f} ({'image right' if yaw > 0 else 'image left'})",
                                 (int(p["box"][0]), int(p["box"][1]) + 18),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255) if turned else (0, 200, 0), 1)
+                if pitch is not None:
+                    down = pitch > cfg.head_pitch_thr
+                    cv2.putText(img, f"pitch {pitch:+.2f} ({'lower than writing' if down else 'writing pose'})",
+                                (int(p["box"][0]), int(p["box"][1]) + 36),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255) if down else (0, 200, 0), 1)
             draw_temporal(img, pol, t, cfg)
             if clips is not None:
                 clips.push(t, img)

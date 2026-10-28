@@ -40,14 +40,16 @@ class Alert:
         what = {"phone_in_hand": "mobile-phone interaction", "phone_on_desk": "mobile phone on desk",
                 "body_movement": "sustained body movement",
                 "unusual_seat_movement": "unusual seat/desk movement",
-                "head_turned": "sustained head turn"}.get(self.event_type, self.event_type)
+                "head_turned": "sustained head turn",
+                "looking_down": "looking down below desk",
+                "material_exchange": "material exchange between students"}.get(self.event_type, self.event_type)
         when = clock or f"{self.t_alert:.1f}s"
         return f"Potential {what} detected at {when} - please review."
 
 
 class BaselinePersistence:
     def __init__(self, cfg: Config):
-        self.thr = cfg.persistence_s
+        self.cfg = cfg
         self.start, self.alerted = {}, set()
 
     def step(self, t: float, signals: dict, present_tracks: set):
@@ -61,7 +63,7 @@ class BaselinePersistence:
                     self.alerted.discard(key)
                     continue
                 self.start.setdefault(key, t)
-                if t - self.start[key] >= self.thr and key not in self.alerted:
+                if t - self.start[key] >= self.cfg.persistence_for(ev) and key not in self.alerted:
                     self.alerted.add(key)
                     alerts.append(Alert(tid, ev, t, self.start[key], signals[key], 1.0))
         return alerts
@@ -120,7 +122,7 @@ class ConfidenceAwareAlerter:
                 continue
             dur = t - ep.start
             ratio = ep.on_time / dur if dur > 0 else 1.0
-            if not ep.alerted and dur >= cfg.persistence_s and ratio >= cfg.min_positive_ratio:
+            if not ep.alerted and dur >= cfg.persistence_for(key[1]) and ratio >= cfg.min_positive_ratio:
                 conf = (ep.conf_sum / ep.n_on) * min(1.0, ratio)
                 ep.alerted = True
                 if conf >= cfg.min_alert_confidence:

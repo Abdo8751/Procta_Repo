@@ -21,7 +21,8 @@ from pathlib import Path
 
 EVENT_NAMES = {"phone_in_hand": "Phone in hand", "phone_on_desk": "Phone on desk",
                "body_movement": "Body movement", "unusual_seat_movement": "Unusual seat movement",
-               "head_turned": "Head turned away"}
+               "head_turned": "Head turned away", "looking_down": "Looking down below desk",
+               "material_exchange": "Material exchange"}
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (

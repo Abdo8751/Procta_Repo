@@ -41,6 +41,9 @@ def main():
     ap.add_argument("--imgsz", type=int, default=416, help="pose model input size")
     ap.add_argument("--det-imgsz", type=int, default=0, help="object detector input size (0 = --imgsz)")
     ap.add_argument("--stride", type=int, default=1, help="process every Nth frame")
+    ap.add_argument("--object-detector", choices=["coco", "world"], default="coco",
+                    help="coco = YOLOv8n cell phone; world = YOLO-World + CLIP phone/calculator check")
+    ap.add_argument("--det-skip", type=int, default=1, help="run the object detector on every Nth processed frame")
     ap.add_argument("--start", type=float, default=0.0, help="start at this video second")
     ap.add_argument("--seconds", type=float, default=None, help="only process this many seconds")
     ap.add_argument("--out", default=None)
@@ -49,7 +52,8 @@ def main():
 
     video = Path(args.video)
     cfg = Config(imgsz=args.imgsz, det_imgsz=args.det_imgsz, det_model=str(ROOT / "models/yolov8n.pt"),
-                 pose_model=str(ROOT / "models/yolov8n-pose.pt"))
+                 pose_model=str(ROOT / "models/yolov8n-pose.pt"), object_detector=args.object_detector,
+                 det_frame_skip=args.det_skip, world_model=str(ROOT / "models/yolov8s-worldv2.pt"))
     cap = cv2.VideoCapture(str(video))
     n = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     fps = cap.get(cv2.CAP_PROP_FPS) or 30

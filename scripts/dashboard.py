@@ -246,7 +246,8 @@ function render(){
    :`<button class="ok" onclick="review(${a.id},'confirmed')">Confirm</button> <button class="no" onclick="review(${a.id},'dismissed')">Dismiss</button>`}</td>
   <td><button class="del" title="Delete this alert" onclick="delAlert(${a.id})">Delete</button></td></tr>`}).join('')
   ||'<tr><td colspan="13" class="empty">No alerts yet &mdash; run python scripts/live.py</td></tr>';
- const kinds={arrive:'Arrived at point',leave:'Left point',insufficient_view:'Insufficient view - asked to move'};
+ const kinds={arrive:'Arrived at point',leave:'Left point',insufficient_view:'Insufficient view - asked to move',
+  permitted_device:'Permitted device seen (logged, not alerted)',authorised_exchange:'Authorised exchange with invigilator (logged, not alerted)'};
  $('obs').innerHTML=obs.map(o=>`<tr><td>${esc(o.timestamp.replace('T',' '))}</td><td>${num(o.t_session_s,1)} s</td><td>${esc(o.point)}</td><td>${esc(kinds[o.kind]||o.kind)}</td><td class="muted">${esc(o.note)}</td></tr>`).join('')
   ||'<tr><td colspan="5" class="empty">No robot observations yet</td></tr>';
  seen=ids;

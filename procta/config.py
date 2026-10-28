@@ -9,9 +9,10 @@ PHONE_CLASS_ID = 67          # 'cell phone'
 LEFT_SHOULDER, RIGHT_SHOULDER = 5, 6
 LEFT_WRIST, RIGHT_WRIST = 9, 10
 NOSE, LEFT_EYE, RIGHT_EYE = 0, 1, 2
+LEFT_EAR, RIGHT_EAR = 3, 4
 
 EVENT_TYPES = ("phone_in_hand", "phone_on_desk", "body_movement", "unusual_seat_movement",
-               "head_turned")
+               "head_turned", "looking_down", "material_exchange")
 
 
 @dataclass
@@ -23,18 +24,37 @@ class Config:
     det_imgsz: int = 0                # object-detector input size; 0 = same as imgsz (far back rows need 960+)
     phone_conf: float = 0.25          # minimum detector confidence for a phone box
     det_frame_skip: int = 1           # 1 = run phone detector on every frame (offline default)
+    object_detector: str = "coco"     # "coco": YOLOv8n cell-phone class (calculators look like phones)
+                                      # "world": YOLO-World proposes phone/calculator/paper/book, CLIP verifies
+    world_model: str = "models/yolov8s-worldv2.pt"
+    world_classes: tuple = ("cell phone", "calculator", "sheet of paper", "book")
+    world_conf: float = 0.1           # low on purpose: YOLO-World proposes, CLIP decides
+    clip_phone_min: float = 0.35      # CLIP p(smartphone) needed to keep a box as a phone
 
     # --- per-frame event signals ---
     phone_proximity_factor: float = 1.5     # wrist-to-phone distance < factor * phone diagonal
     keypoint_min_conf: float = 0.3          # ignore wrists/shoulders the pose model is unsure about
     body_movement_speed: float = 150.0      # shoulder-centroid speed, px/s
-    seat_drift_px: float = 80.0             # distance from calibrated seat centroid, px
+    seat_drift_px: float = 80.0             # distance from calibrated seat centroid, px (no seat zones)
+    seat_drift_rel: float = 0.35            # with seat zones: drift > this x the person's calibrated box width
+                                            # (back-row students are half as big in the image as the front row)
     calibration_frames: int = 30
     head_yaw_thr: float = 0.25              # |yaw - calibrated yaw|, yaw = (nose_x - eye-mid x) / eye distance
     standing_ratio: float = 1.8             # person box taller than this x seat zone height = standing (invigilator)
+    # looking_down: head lowered BEYOND the calibrated writing pose AND hands not on the desk
+    head_pitch_thr: float = 0.08            # pitch - calibrated pitch; pitch = (eye y - ear y) / shoulder width
+    hands_drop_thr: float = 0.35            # wrists lower than calibrated writing position by this x shoulder width
+                                            # (or not visible at all = below the desk edge)
+    # material_exchange: wrists of two different people meet between them
+    exchange_wrist_k: float = 0.6           # wrist-to-wrist distance < k x mean shoulder width of the two
+    exchange_paper_bonus: float = 0.2       # confidence bonus when a sheet of paper is at the wrists
 
     # --- temporal alerting (both modes) ---
     persistence_s: float = 3.0              # "alert only if behaviour persists > 3 s"
+    event_persistence_s: dict = field(default_factory=lambda: {"material_exchange": 1.0})  # exchanges are short
+
+    def persistence_for(self, event_type):
+        return self.event_persistence_s.get(event_type, self.persistence_s)
 
     # --- improvement only ---
     assign_phone_to_owner: bool = True      # each phone belongs to ONE nearest person

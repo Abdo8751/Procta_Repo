@@ -182,3 +182,99 @@ def test_consolidation_keeps_seats_apart():
     _, n2 = c.on_alert(Alert("B2", "phone_in_hand", 12, 9, 0.8, 1), "T1")   # other student: new event
     _, n3 = c.on_alert(Alert("F1", "phone_in_hand", 25, 22, 0.8, 1), "T1")  # same seat again: merged
     assert (n1, n2, n3) == (True, True, False)
+
+
+# ---- Phase 2: phone vs calculator, looking_down, material_exchange ---------------------------
+
+def _body(pid, cx, top, sw=100, wrists=((0.3, 1.6), (-0.3, 1.6)), wrist_conf=0.9, pitch=0.0):
+    """Seated person facing the camera: shoulders at y=top+150, shoulder width sw.
+    wrists: (dx, dy) in shoulder widths from the shoulder centre. pitch: ears raised by pitch x sw."""
+    k = [[0, 0, 0.0] for _ in range(17)]
+    sy = top + 150
+    k[5], k[6] = [cx + sw / 2, sy, 0.9], [cx - sw / 2, sy, 0.9]          # shoulders
+    k[1], k[2] = [cx + 15, top + 60, 0.9], [cx - 15, top + 60, 0.9]      # eyes
+    k[0] = [cx, top + 75, 0.9]                                           # nose
+    k[3], k[4] = [cx + 35, top + 60 - pitch * sw, 0.9], [cx - 35, top + 60 - pitch * sw, 0.9]   # ears
+    for i, (dx, dy) in zip((9, 10), wrists):
+        k[i] = [cx + dx * sw, sy + dy * sw, wrist_conf]
+    return {"id": pid, "box": [cx - 150, top, cx + 150, top + 450], "conf": 0.9, "kps": k}
+
+
+def _frames(make, n, objects=(), wh=(1000, 1000)):
+    return [{"t": i / 10, "wh": list(wh), "persons": make(i), "phones": [], "objects": list(objects)} for i in range(n)]
+
+
+def test_clip_decision_calculator_is_not_a_phone():
+    from procta.verify import decide
+    assert decide({"a smartphone": 0.01, "a calculator": 0.98, "a pencil case": 0.01}) == ("calculator", 0.98)
+    assert decide({"a smartphone": 0.69, "a calculator": 0.14, "a pencil case": 0.1}) == ("cell phone", 0.69)
+    assert decide({"a smartphone": 0.3, "a calculator": 0.28, "a pencil case": 0.25}) is None       # unsure: dropped
+    assert decide({"a smartphone": 0.03, "a calculator": 0.26, "a pencil case": 0.67}) is None      # pencil case
+
+
+def test_calculator_in_hand_gives_no_phone_event_and_is_logged_in_context():
+    calc = {"cls": "calculator", "box": [130, 290, 170, 330], "conf": 0.98}
+    pe = _person(1, [0, 0, 200, 400], (150, 300))
+    for mode in ("improved", "context"):
+        sig = SignalExtractor(Config(), mode, context=ExamContext(permitted_devices=["calculator"], observation_points=[ObservationPoint("A")]))
+        out = sig({"t": 0.0, "persons": [pe], "phones": [], "objects": [calc]})
+        assert not any(ev.startswith("phone") for _, ev in out)
+        assert bool(sig.notes) == (mode == "context")
+
+
+def test_writing_pose_is_not_looking_down_but_lap_look_is():
+    cfg = Config()
+    calib = cfg.calibration_frames
+    # writing: head lowered a lot (pitch 0.2) but hands stay on the desk -> never looking_down
+    sig = SignalExtractor(cfg, "improved")
+    fr = _frames(lambda i: [_body(1, 500, 100, pitch=0.0 if i < calib else 0.2)], calib + 40)
+    assert not any((1, "looking_down") in sig(f) for f in fr)
+    # head lowered AND hands gone below the desk edge (wrists not visible) -> looking_down
+    sig = SignalExtractor(cfg, "improved")
+    fr = _frames(lambda i: [_body(1, 500, 100, pitch=0.0 if i < calib else 0.2,
+                                  wrist_conf=0.9 if i < calib else 0.05)], calib + 40)
+    outs = [sig(f) for f in fr]
+    assert all((1, "looking_down") not in o for o in outs[:calib])
+    assert all((1, "looking_down") in o for o in outs[calib + 1:])
+    assert Alert(1, "looking_down", 5, 2).message("10:00:00") == \
+        "Potential looking down below desk detected at 10:00:00 - please review."
+
+
+ZONES2 = {"F1": [0.0, 0.0, 0.5, 1.0], "F2": [0.5, 0.0, 1.0, 1.0]}
+
+
+def _pair(reach):
+    """Two neighbours (F1 at x=250, F2 at x=750); with reach their inner wrists meet at x~500."""
+    a = _body(1, 250, 100, sw=150, wrists=((1.55, 0.8), (-0.3, 1.6)) if reach else ((0.3, 1.6), (-0.3, 1.6)))
+    b = _body(2, 750, 100, sw=150, wrists=((0.3, 1.6), (-1.55, 0.8)) if reach else ((0.3, 1.6), (-0.3, 1.6)))
+    return [a, b]
+
+
+def test_material_exchange_between_two_seats_alerts_after_1s():
+    from procta.temporal import ConfidenceAwareAlerter
+    cfg = Config()
+    pt = ObservationPoint("T1", seat_zones=ZONES2)
+    sig, pol = SignalExtractor(cfg, "improved", point=pt), ConfidenceAwareAlerter(cfg)
+    paper = {"cls": "paper", "box": [480, 340, 520, 380], "conf": 0.5}
+    fr = _frames(lambda i: _pair(reach=40 <= i < 55), 70, objects=[paper])      # 1.5 s hand-over
+    alerts = []
+    for f in fr:
+        s = sig(f)
+        if 40 <= f["t"] * 10 < 55:
+            assert ("F1+F2", "material_exchange") in s
+        alerts += pol.step(f["t"], s, sig.present)
+    ex = [a for a in alerts if a.event_type == "material_exchange"]
+    assert len(ex) == 1 and ex[0].track_id == "F1+F2" and 4.9 < ex[0].t_alert < 5.2
+    sig2 = SignalExtractor(cfg, "improved", point=pt)
+    assert not any(("F1+F2", "material_exchange") in sig2(f) for f in _frames(lambda i: _pair(False), 30))
+
+
+def test_exchange_with_invigilator_is_logged_not_signalled_in_context_mode():
+    zones = {"F1": [0.0, 0.0, 0.5, 1.0], "invigilator": [0.5, 0.0, 1.0, 1.0]}
+    pt = ObservationPoint("T1", seat_zones=zones)
+    fr = _frames(lambda i: _pair(reach=True), 5)
+    imp = SignalExtractor(Config(), "improved", point=pt)
+    assert any(("F1+INV", "material_exchange") in imp(f) for f in fr)
+    ctx = SignalExtractor(Config(), "context", context=ExamContext(), point=pt)
+    assert not any(ev == "material_exchange" for f in fr for _, ev in ctx(f))
+    assert ctx.suppressed["authorised exchange with invigilator"] > 0 and ctx.notes[0][2] == "authorised_exchange"

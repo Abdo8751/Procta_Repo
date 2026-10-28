@@ -44,3 +44,24 @@ commit message / chat (0.23 s per processed frame at pose 960, detector 1280, st
 | `tests/test_core.py` | Test: dismiss purges files, keeps the decision, never touches files outside `results/`. |
 
 `configs/exam_context.json`: seat zones redrawn by the author with `define_seats.py` (not AI).
+
+## 2026-10-28 - Phase 2: new / improved detection
+
+| File | What the AI did |
+|---|---|
+| `procta/verify.py` | New. CLIP (ViT-B/32) zero-shot crop classifier (smartphone / calculator / pencil case / pen / paper / hand), batched per frame, cached for boxes that did not move; `decide()` rule. |
+| `procta/detect.py` | `object_detector="world"`: YOLO-World (yolov8s-worldv2, classes cell phone / calculator / sheet of paper / book) proposes objects, CLIP verifies every phone/calculator box; output `phones` (verified) + `objects`. `"coco"` unchanged. |
+| `procta/config.py` | `object_detector`, `world_*`, `clip_phone_min`; `looking_down` and `material_exchange` thresholds; `seat_drift_rel`; `event_persistence_s` (exchange = 1 s) + `persistence_for()`; new EVENT_TYPES. |
+| `procta/signals.py` | `looking_down` (ear-vs-eye pitch beyond the calibrated writing pose AND wrists hidden or lowered), `material_exchange` (wrists of two different seats meet between them; paper bonus; with the invigilator: note in context mode), calculators never give phone events (context: permitted-device note), seat drift relative to the calibrated box width. |
+| `procta/temporal.py` | Persistence threshold looked up per event type (`cfg.persistence_for`); new neutral messages. Episode/alert logic unchanged. |
+| `procta/alert_log.py`, `scripts/dashboard.py` | Names for the new events; observation kinds `permitted_device`, `authorised_exchange`. |
+| `procta/draw.py`, `scripts/live.py` | Calculators drawn in orange; pitch readout under the yaw readout; `--object-detector`; context notes written to the observation log (max 1 per person and kind per 30 s); per-event progress bars. |
+| `scripts/extract_detections.py` | `--object-detector`, `--det-skip`. |
+| `docs/annotation_guide.md`, `docs/event_definitions.md` | Categories `looking_down`, `material_exchange`; group-session seats and lookalikes. |
+| `tests/test_week5.py` | Tests: CLIP decision (calculator not a phone), calculator in hand gives no phone event (context: logged), writing pose not looking_down / lap look is, exchange between two seats alerts after 1 s, exchange with invigilator suppressed in context mode. |
+
+Checks run by the AI on Test_1 (author to verify): YOLO-World alone labels calculators "cell phone"
+(0.61-0.66); CLIP on crops: calculators 0.98-1.00, B2's phone 0.69, F2's phone 0.75. On a 30 s slice
+(55-85 s) world+CLIP found only the two real phones and recognised all four calculators, where the
+COCO detector produced 447 frames of "phone in hand" at F2. Normal writing (60-90 s): no
+looking_down or material_exchange signal. Speed: 0.33 s per processed frame (~22 min whole video).
