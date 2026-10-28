@@ -20,6 +20,7 @@ class Config:
     det_model: str = "models/yolov8n.pt"
     pose_model: str = "models/yolov8n-pose.pt"
     imgsz: int = 416
+    det_imgsz: int = 0                # object-detector input size; 0 = same as imgsz (far back rows need 960+)
     phone_conf: float = 0.25          # minimum detector confidence for a phone box
     det_frame_skip: int = 1           # 1 = run phone detector on every frame (offline default)
 
@@ -30,6 +31,7 @@ class Config:
     seat_drift_px: float = 80.0             # distance from calibrated seat centroid, px
     calibration_frames: int = 30
     head_yaw_thr: float = 0.25              # |yaw - calibrated yaw|, yaw = (nose_x - eye-mid x) / eye distance
+    standing_ratio: float = 1.8             # person box taller than this x seat zone height = standing (invigilator)
 
     # --- temporal alerting (both modes) ---
     persistence_s: float = 3.0              # "alert only if behaviour persists > 3 s"

@@ -32,7 +32,7 @@ class Detector:
         cfg = self.cfg
         if self._frame_idx % cfg.det_frame_skip == 0:
             r = self.det.predict(frame, classes=[PHONE_CLASS_ID], conf=cfg.phone_conf,
-                                 imgsz=cfg.imgsz, verbose=False)[0]
+                                 imgsz=cfg.det_imgsz or cfg.imgsz, verbose=False)[0]
             phones = []
             if r.boxes is not None:
                 for xyxy, conf in zip(r.boxes.xyxy.cpu().numpy(), r.boxes.conf.cpu().numpy()):

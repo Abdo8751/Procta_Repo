@@ -25,7 +25,7 @@ from .config import Config, EVENT_TYPES
 
 @dataclass
 class Alert:
-    track_id: int
+    track_id: int           # identity: tracker id, or the seat label (str) when seats are defined
     event_type: str
     t_alert: float          # time the alert fired (video seconds)
     t_start: float          # time the underlying episode started
@@ -170,7 +170,7 @@ def run_policy(frames, mode: str, cfg: Config, context=None, point=None, return_
     alerts = []
     for fr in frames:
         s = sig(fr)
-        new = pol.step(fr["t"], s, {p["id"] for p in fr["persons"]})
+        new = pol.step(fr["t"], s, sig.present)
         if cons is None:
             alerts += new
             continue

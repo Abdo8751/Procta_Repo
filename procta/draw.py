@@ -21,12 +21,23 @@ def draw_pose(img, kps):
             cv2.circle(img, p, 4, (0, 0, 0), 1)
 
 
-def annotate(frame, dets: dict, signals: dict = None, banner_lines=(), show_pose=True):
+def draw_seat_zones(img, zones):
+    h, w = img.shape[:2]
+    for sid, z in (zones or {}).items():
+        x1, y1, x2, y2 = int(z[0] * w), int(z[1] * h), int(z[2] * w), int(z[3] * h)
+        col = (200, 120, 255) if sid.lower() == "invigilator" else (160, 160, 160)
+        cv2.rectangle(img, (x1, y1), (x2, y2), col, 1)
+        cv2.putText(img, sid, (x1 + 4, y2 - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.6, col, 2)
+
+
+def annotate(frame, dets: dict, signals: dict = None, banner_lines=(), show_pose=True, seat_zones=None):
     img = frame.copy()
+    draw_seat_zones(img, seat_zones)
     for p in dets["persons"]:
         x1, y1, x2, y2 = map(int, p["box"])
         cv2.rectangle(img, (x1, y1), (x2, y2), (0, 200, 0), 2)
-        cv2.putText(img, f"ID {p['id']}", (x1, max(12, y1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 0), 1)
+        label = f"{p['seat']} (id {p['id']})" if p.get("seat") else f"ID {p['id']}"
+        cv2.putText(img, label, (x1, max(12, y1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 0), 1)
         if show_pose:
             draw_pose(img, p["kps"])
     for ph in dets["phones"]:
@@ -37,7 +48,7 @@ def annotate(frame, dets: dict, signals: dict = None, banner_lines=(), show_pose
     y = 20
     if signals:
         for (tid, ev), conf in signals.items():
-            cv2.putText(img, f"track {tid}: {ev} ({conf:.2f})", (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+            cv2.putText(img, f"{tid if isinstance(tid, str) else f'track {tid}'}: {ev} ({conf:.2f})", (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
                         (255, 255, 255), 1)
             y += 18
     for line in banner_lines:

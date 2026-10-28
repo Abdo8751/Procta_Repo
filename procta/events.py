@@ -9,7 +9,8 @@ within `window_s` of the event's last sighting. The evidence of every sighting i
 
 Track ids are not used for matching: the pose tracker often gives the same student a new
 id after an occlusion (4 ids for one person in the live log), so matching on id would
-split one event into several.
+split one event into several. Seats ARE stable, so when identities are seat labels
+(several students in view) an event only absorbs sightings from the same seat.
 """
 
 from dataclasses import dataclass, field
@@ -36,16 +37,22 @@ class EventConsolidator:
         self.window_s = window_s
         self.events = []
 
-    def _match(self, event_type, point, t_start):
+    @staticmethod
+    def _same_person(ev, ident):
+        seats = {i for i in ev.track_ids if isinstance(i, str)}
+        return not (seats or isinstance(ident, str)) or ident in seats
+
+    def _match(self, event_type, point, t_start, ident=None):
         for ev in reversed(self.events):
-            if ev.event_type == event_type and ev.point == point and t_start - ev.t_last_seen <= self.window_s:
+            if (ev.event_type == event_type and ev.point == point and t_start - ev.t_last_seen <= self.window_s
+                    and self._same_person(ev, ident)):
                 return ev
         return None
 
     def on_alert(self, alert, point="A"):
         """alert: temporal.Alert. Returns (event, is_new)."""
         conf = 0.0 if alert.confidence != alert.confidence else float(alert.confidence)
-        ev = self._match(alert.event_type, point, alert.t_start)
+        ev = self._match(alert.event_type, point, alert.t_start, alert.track_id)
         if ev is not None:
             ev.sightings += 1
             ev.sighting_starts.append(alert.t_start)
@@ -60,9 +67,9 @@ class EventConsolidator:
 
     def on_episode_end(self, key, last_on, point="A"):
         """An alerted episode ended: extend the matching event's last sighting."""
-        _, event_type = key
+        ident, event_type = key
         for ev in reversed(self.events):
-            if ev.event_type == event_type and ev.point == point:
+            if ev.event_type == event_type and ev.point == point and self._same_person(ev, ident):
                 ev.t_last_seen = max(ev.t_last_seen, last_on)
                 return ev
         return None

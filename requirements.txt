@@ -4,3 +4,4 @@ numpy
 lap            # needed by Ultralytics' ByteTrack tracker
 matplotlib     # simulation plot
 pytest         # unit tests
+imageio-ffmpeg # bundled ffmpeg for scripts/convert_video.py (phone .MOV -> H.264 .mp4)

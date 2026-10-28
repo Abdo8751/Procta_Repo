@@ -127,3 +127,58 @@ def test_clip_recorder_writes_preroll_clip(tmp_path):
     import cv2
     n = int(cv2.VideoCapture(str(tmp_path / "ev001_s1.mp4")).get(cv2.CAP_PROP_FRAME_COUNT))
     assert 25 <= n <= 30                        # from 1 s before the start (t=1.0) to stop + 0.5 s (t=6.5)
+
+
+# ---- seats (Test_1: 6 people, tracker ids switch) ------------------------------------------
+
+def _pe(pid, box):
+    return {"id": pid, "box": box, "conf": 0.9, "kps": [[0, 0, 0]] * 17}
+
+
+ZONES = {"F1": [0.0, 0.5, 0.33, 1.0], "F2": [0.33, 0.5, 0.66, 1.0], "B1": [0.0, 0.1, 0.33, 0.5],
+         "invigilator": [0.9, 0.0, 1.0, 1.0]}
+
+
+def test_seat_assignment_by_box_centre_and_invigilator():
+    from procta.seats import INVIGILATOR, assign_seats
+    wh = [1000, 1000]
+    persons = [_pe(7, [50, 550, 300, 950]),       # front left
+               _pe(9, [400, 600, 600, 950]),      # front middle
+               _pe(3, [60, 150, 300, 450]),       # back left
+               _pe(4, [920, 100, 990, 900]),      # in the invigilator zone
+               _pe(5, [700, 100, 800, 600])]      # between the rows, outside all seats -> walking
+    assert assign_seats(persons, ZONES, wh) == ["F1", "F2", "B1", INVIGILATOR, INVIGILATOR]
+    assert assign_seats(persons, {}, wh) == [None] * 5                      # no zones: track ids
+
+
+def test_standing_person_in_front_of_seat_is_invigilator():
+    from procta.seats import INVIGILATOR, assign_seats
+    tall = _pe(8, [380, 0, 600, 1000])            # centre in F2 zone but twice its height
+    seated = _pe(2, [400, 600, 600, 950])
+    assert assign_seats([tall, seated], ZONES, [1000, 1000]) == [INVIGILATOR, "F2"]
+
+
+def test_seat_identity_survives_track_id_switch():
+    from procta.context import ObservationPoint
+    from procta.signals import SignalExtractor
+    from procta.temporal import ConfidenceAwareAlerter
+    cfg = Config()
+    sig = SignalExtractor(cfg, "improved", point=ObservationPoint("T1", seat_zones=ZONES))
+    pol, alerts = ConfidenceAwareAlerter(cfg), []
+    for i in range(60):                           # same student, tracker id changes every 10 frames
+        p = _pe(100 + i // 10, [50, 550, 300, 950])
+        p["kps"] = [list(k) for k in p["kps"]]
+        p["kps"][9] = [150, 800, 0.9]
+        fr = {"t": i / 10, "wh": [1000, 1000], "persons": [p], "phones": [{"box": [140, 790, 170, 830], "conf": 0.8}]}
+        alerts += pol.step(fr["t"], sig(fr), sig.present)
+    assert [(a.track_id, a.event_type) for a in alerts] == [("F1", "phone_in_hand")]
+
+
+def test_consolidation_keeps_seats_apart():
+    from procta.events import EventConsolidator
+    from procta.temporal import Alert
+    c = EventConsolidator(30)
+    _, n1 = c.on_alert(Alert("F1", "phone_in_hand", 10, 7, 0.8, 1), "T1")
+    _, n2 = c.on_alert(Alert("B2", "phone_in_hand", 12, 9, 0.8, 1), "T1")   # other student: new event
+    _, n3 = c.on_alert(Alert("F1", "phone_in_hand", 25, 22, 0.8, 1), "T1")  # same seat again: merged
+    assert (n1, n2, n3) == (True, True, False)

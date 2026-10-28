@@ -40,6 +40,12 @@ python scripts/evaluate_sessions.py --set dev
 python scripts/evaluate_sessions.py --freeze configs/thresholds_frozen.json
 python scripts/evaluate_sessions.py --set test --thresholds configs/thresholds_frozen.json
 
+# 5. Group recording (6 students, fixed phone camera): convert once, draw seats, extract
+python scripts/convert_video.py "C:/Users/Ar/Downloads/Test_1.MOV" data/videos/Test_1.mp4   # 4K HEVC -> 1080p H.264
+python scripts/define_seats.py --video data/videos/Test_1.mp4 --auto --t 60    # seat zones F1-F3, B1-B3 -> point T1
+python scripts/extract_detections.py --video data/videos/Test_1.mp4 --stride 2 --imgsz 960 --det-imgsz 1280   # ~15 min on CPU
+python scripts/live.py --mode context --video data/videos/Test_1.mp4 --start-point T1
+
 # Replay any recording as if live (demo with a different input)
 python scripts/live.py --mode context --video data/videos/s04.mp4
 ```
@@ -52,9 +58,10 @@ one evidence clip per sighting (animated WebP + MP4) and the invigilator's Confi
 ## Layout
 ```
 procta/       config, detect (YOLO), signals (per-frame events), temporal (B0/B1/temporal alerting), events (consolidation),
-              context (exam rules + route), clips (rolling-buffer evidence clips), alert_log (SQLite),
+              context (exam rules + route), seats (seat zones -> identity), clips (rolling-buffer evidence clips), alert_log (SQLite),
               evaluation (event-level P/R/false alarms/latency), review (proctor review page), draw
 scripts/      live, dashboard, record_session, label_video, extract_detections, run_offline, evaluate_sessions,
+              convert_video, define_seats,
               simulate_detector_noise, analyze_live_log
 configs/      exam_context.json (rules + observation route), thresholds_frozen.json (after --freeze)
 docs/         event definitions, recording protocol, week-2 report

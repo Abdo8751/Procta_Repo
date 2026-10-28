@@ -1,25 +1,91 @@
 {
   "exam": "PROCTA mock quiz v1 (staged, ungraded)",
   "notes": "Rules for this mock exam. Used only by --mode context; the other modes ignore it. Sides are IMAGE sides as the camera sees them: 'right' means the student's nose moves towards the right edge of the camera image (check with the yaw readout in live.py: positive yaw = image right).",
-
-  "permitted_devices": ["calculator"],
-  "permitted_materials": ["question sheet", "one A4 formula sheet"],
-  "authorised_interactions": ["handing the paper to the invigilator", "raising a hand to ask the invigilator"],
-
-  "seats": [
-    {"id": "S1", "participant": "P01", "neighbour_desk": "S2 (empty desk with an answer sheet)"}
+  "permitted_devices": [
+    "calculator"
   ],
-
+  "permitted_materials": [
+    "question sheet",
+    "one A4 formula sheet"
+  ],
+  "authorised_interactions": [
+    "handing the paper to the invigilator",
+    "raising a hand to ask the invigilator"
+  ],
+  "seats": [
+    {
+      "id": "S1",
+      "participant": "P01",
+      "neighbour_desk": "S2 (empty desk with an answer sheet)"
+    },
+    {
+      "id": "F1",
+      "participant": "",
+      "row": "front",
+      "neighbours": [
+        "F2",
+        "B1"
+      ]
+    },
+    {
+      "id": "F2",
+      "participant": "",
+      "row": "front",
+      "neighbours": [
+        "F1",
+        "F3",
+        "B2"
+      ]
+    },
+    {
+      "id": "F3",
+      "participant": "",
+      "row": "front",
+      "neighbours": [
+        "F2",
+        "B3"
+      ]
+    },
+    {
+      "id": "B1",
+      "participant": "",
+      "row": "back",
+      "neighbours": [
+        "B2",
+        "F1"
+      ]
+    },
+    {
+      "id": "B2",
+      "participant": "",
+      "row": "back",
+      "neighbours": [
+        "B1",
+        "B3",
+        "F2"
+      ]
+    },
+    {
+      "id": "B3",
+      "participant": "",
+      "row": "back",
+      "neighbours": [
+        "B2",
+        "F3"
+      ]
+    }
+  ],
   "insufficient_view_s": 4.0,
   "consolidation_window_s": 30.0,
-
   "observation_points": [
     {
       "id": "A",
       "name": "Front of desk, slightly left",
       "dwell_s": 120,
       "neighbour_side": "left",
-      "allowed_look_sides": ["right"],
+      "allowed_look_sides": [
+        "right"
+      ],
       "allowed_look_reason": "wall clock and invigilator are on the image right",
       "ignore_zones": []
     },
@@ -28,18 +94,78 @@
       "name": "Side view from the aisle",
       "dwell_s": 120,
       "neighbour_side": "right",
-      "allowed_look_sides": ["left"],
+      "allowed_look_sides": [
+        "left"
+      ],
       "allowed_look_reason": "invigilator desk is on the image left",
-      "ignore_zones": [[0.0, 0.0, 0.2, 0.5]]
+      "ignore_zones": [
+        [
+          0.0,
+          0.0,
+          0.2,
+          0.5
+        ]
+      ]
     },
     {
       "id": "C",
       "name": "Front-right, elevated",
       "dwell_s": 120,
       "neighbour_side": "left",
-      "allowed_look_sides": ["right"],
+      "allowed_look_sides": [
+        "right"
+      ],
       "allowed_look_reason": "wall clock on the image right",
       "ignore_zones": []
+    },
+    {
+      "id": "T1",
+      "name": "Fixed phone camera, front of room (Test_1)",
+      "dwell_s": 0,
+      "on_route": false,
+      "neighbour_side": "",
+      "allowed_look_sides": [],
+      "allowed_look_reason": "",
+      "ignore_zones": [],
+      "seat_zones": {
+        "F1": [
+          0.0865,
+          0.2584,
+          0.3877,
+          0.8746
+        ],
+        "F2": [
+          0.3732,
+          0.2525,
+          0.7345,
+          0.8508
+        ],
+        "F3": [
+          0.7195,
+          0.3016,
+          1.0,
+          0.7729
+        ],
+        "B1": [
+          0.2542,
+          0.1908,
+          0.3995,
+          0.4481
+        ],
+        "B2": [
+          0.4081,
+          0.1609,
+          0.6172,
+          0.4373
+        ],
+        "B3": [
+          0.5976,
+          0.1258,
+          0.7903,
+          0.4535
+        ]
+      }
     }
-  ]
+  ],
+  "seats_note": "S1 is the single-webcam setup (points A-C). F1-B3 are the 6-person room of Test_1: F = front row, B = back row, numbered left to right in the camera image. Seat zones (geometry) are per observation point, see point T1; draw them with scripts/define_seats.py."
 }

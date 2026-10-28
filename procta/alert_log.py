@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS observations (
 
 # Columns added in week 5 (robot route, consolidation, clips). Old databases are migrated on open.
 NEW_ALERT_COLUMNS = {"observation_point": "TEXT", "sightings": "INTEGER DEFAULT 1", "last_seen_s": "REAL",
-                     "clips": "TEXT", "region": "TEXT", "context_note": "TEXT"}
+                     "clips": "TEXT", "region": "TEXT", "context_note": "TEXT", "seat": "TEXT"}
 
 
 def confidence_level(conf):
@@ -97,14 +97,15 @@ class AlertLog:
             cur = self.con.execute(
                 "INSERT INTO alerts (session, mode, timestamp, t_session_s, track_id, event_type, alert_name,"
                 " message, confidence, confidence_level, positive_ratio, episode_start_s, duration_s, evidence,"
-                " observation_point, sightings, last_seen_s, clips, region, context_note)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " observation_point, sightings, last_seen_s, clips, region, context_note, seat)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (self.session, self.mode, ts.isoformat(timespec="seconds"), round(alert.t_alert, 2),
-                 int(alert.track_id), alert.event_type, EVENT_NAMES.get(alert.event_type, alert.event_type),
+                 alert.track_id if isinstance(alert.track_id, str) else int(alert.track_id), alert.event_type, EVENT_NAMES.get(alert.event_type, alert.event_type),
                  alert.message(ts.strftime("%H:%M:%S")), conf, confidence_level(conf), ratio,
                  round(alert.t_start, 2), round(alert.t_alert - alert.t_start, 2), evidence,
                  point, 1, round(alert.t_alert, 2), json.dumps([clip] if clip else []),
-                 json.dumps(region) if region else None, context_note))
+                 json.dumps(region) if region else None, context_note,
+                 alert.track_id if isinstance(alert.track_id, str) else None))
         return cur.lastrowid
 
     def update_event(self, row_id, sightings=None, last_seen_s=None, add_clip=None):

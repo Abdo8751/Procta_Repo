@@ -48,8 +48,8 @@ def clear_view(dets):
     return any(any(p["kps"][i][2] > 0.3 for i in FACE_OR_HANDS) for p in dets["persons"])
 
 
-def region_of(dets, track_id):
-    p = next((p for p in dets["persons"] if p["id"] == track_id), None)
+def region_of(dets, ident):
+    p = next((p for p in dets["persons"] if p.get("key", p["id"]) == ident), None)
     return [round(v) for v in p["box"]] if p else None
 
 
@@ -98,7 +98,9 @@ def main():
     cfg = Config(imgsz=args.imgsz, det_frame_skip=args.det_skip,
                  det_model=str(ROOT / "models/yolov8n.pt"), pose_model=str(ROOT / "models/yolov8n-pose.pt"))
     ctx = ExamContext.load(args.context)
-    route = ctx.observation_points
+    # robot route = points marked on_route; a fixed viewpoint (e.g. a recorded room with seat
+    # zones) is only used when named with --start-point
+    route = [p for p in ctx.observation_points if p.on_route or p.id == args.start_point] or ctx.observation_points
     pi = next((i for i, p in enumerate(route) if p.id == args.start_point), 0)
 
     started_at = datetime.now()
@@ -181,11 +183,12 @@ def main():
             point = route[pi]
             dets = det(frame, t)
             signals = sig(dets)
-            alerts = pol.step(t, signals, {p["id"] for p in dets["persons"]})
+            alerts = pol.step(t, signals, sig.present)
             img = annotate(frame, dets, signals, show_pose=show_pose)
 
             for a in alerts:
-                ev_file = out / "evidence" / f"{a.t_alert:07.1f}s_{point.id}_track{a.track_id}_{a.event_type}.jpg"
+                who = a.track_id if isinstance(a.track_id, str) else f"track{a.track_id}"
+                ev_file = out / "evidence" / f"{a.t_alert:07.1f}s_{point.id}_{who}_{a.event_type}.jpg"
                 cv2.imwrite(str(ev_file), img)
                 region = region_of(dets, a.track_id)
                 eid, sighting = "", 1
@@ -215,7 +218,7 @@ def main():
                 else:
                     msg = a.message(datetime.now().strftime("%H:%M:%S"))
                 recent.append((t + 4, f"[{point.id}] {msg}{conf}"))
-                print(f"[{t:7.1f}s] [{point.id}] track {a.track_id}: {msg}{conf}")
+                print(f"[{t:7.1f}s] [{point.id}] {'seat' if isinstance(a.track_id, str) else 'track'} {a.track_id}: {msg}{conf}")
 
             if temporal:
                 end_episodes(pol.closed, t)
@@ -236,9 +239,10 @@ def main():
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
 
             recent = [r for r in recent if r[0] > t]
-            img = annotate(frame, dets, signals, [r[1] for r in recent], show_pose=show_pose)
+            img = annotate(frame, dets, signals, [r[1] for r in recent], show_pose=show_pose,
+                           seat_zones=point.seat_zones)
             for p in dets["persons"]:             # head yaw vs calibration, to tune head_yaw_thr
-                yaw = sig.head_yaw.get(p["id"])
+                yaw = sig.head_yaw.get(p.get("key", p["id"]))
                 if yaw is not None:
                     turned = abs(yaw) > cfg.head_yaw_thr
                     cv2.putText(img, f"yaw {yaw:+.2f} ({'image right' if yaw > 0 else 'image left'})",

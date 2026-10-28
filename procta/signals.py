@@ -1,5 +1,8 @@
 """Per-frame event signals: turn one frame's detections into
-{(track_id, event_type): confidence} for every event that is "on" in that frame.
+{(identity, event_type): confidence} for every event that is "on" in that frame.
+identity = the person's seat (F1, B2, ...) when the observation point has seat zones,
+otherwise the tracker id. Seats survive tracker id switches; the invigilator (INV) gets
+no examinee events.
 
 mode="baseline" reproduces procta_live_baseline.py exactly:
   * a wrist counts if its coordinates are non-zero
@@ -25,6 +28,7 @@ from collections import Counter, defaultdict
 import numpy as np
 
 from .context import in_zone
+from .seats import INVIGILATOR, assign_seats
 from .config import (Config, LEFT_EYE, LEFT_SHOULDER, LEFT_WRIST, NOSE, RIGHT_EYE, RIGHT_SHOULDER,
                      RIGHT_WRIST)
 
@@ -78,7 +82,8 @@ class SignalExtractor:
         self.seat_baseline = {}
         self.head_samples = defaultdict(list)
         self.head_baseline = {}
-        self.head_yaw = {}                      # track -> latest yaw offset (for the live overlay)
+        self.head_yaw = {}                      # identity -> latest yaw offset (for the live overlay)
+        self.present = set()                    # identities of the examinees in the last frame
 
     def set_point(self, point):
         """New observation point = new viewpoint: re-calibrate seat and head pose."""
@@ -136,8 +141,15 @@ class SignalExtractor:
         owners = (assign_phone_owners(phones, persons)
                   if self.mode in ("improved", "context") and cfg.assign_phone_to_owner else None)
 
+        zones = self.point.seat_zones if self.point is not None else {}
+        seats = assign_seats(persons, zones, frame.get("wh"), cfg.standing_ratio)
+        self.present = set()
         for j, pe in enumerate(persons):
-            tid = pe["id"]
+            pe["seat"] = seats[j]
+            tid = pe["key"] = seats[j] or pe["id"]
+            if tid == INVIGILATOR:
+                continue
+            self.present.add(tid)
             lw, lw_ok, _ = self._kp(pe, LEFT_WRIST)
             rw, rw_ok, _ = self._kp(pe, RIGHT_WRIST)
 

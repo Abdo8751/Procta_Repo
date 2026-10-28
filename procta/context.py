@@ -23,6 +23,8 @@ class ObservationPoint:
     allowed_look_sides: list = field(default_factory=list)
     allowed_look_reason: str = ""
     ignore_zones: list = field(default_factory=list)   # [x1, y1, x2, y2] as fractions of the image
+    seat_zones: dict = field(default_factory=dict)     # seat id -> [x1, y1, x2, y2] (+ optional "invigilator")
+    on_route: bool = True                  # False: a fixed recording viewpoint, not cycled with n/p
 
 
 @dataclass
