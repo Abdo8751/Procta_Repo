@@ -81,3 +81,4 @@ looking_down or material_exchange signal. Speed: 0.33 s per processed frame (~22
 | `tests/test_week5.py` | Tests: seat-aware evaluation, draft-label shift, hands in lap with head raised is not looking_down, per-point threshold override. |
 | `scripts/summarize_session.py` | New. All four methods x both object detectors on one session -> `results/<name>/summary.md` (+ json); with `--gt` adds per-event and per-seat metrics. |
 | `docs/week6_report.html` | New. Week-6 progress report for the supervisor meeting (published as a private claude.ai artifact); numbers from `results/test_1/summary.md` and eye checks of the cited frames. |
+| `scripts/dashboard.py` | Priority for repeat activity: per student (seat/track) and session, activity = alerts + repeated sightings (dismissed excluded, exchanges count for both students); 2 = Elevated, 3+ = High; priority pill and row stripe on each alert, 'Students needing attention' table, 'Sort by priority' option. |

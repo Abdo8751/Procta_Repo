@@ -1,6 +1,10 @@
 """Local alert dashboard: every live alert from results/alerts.db, updating while
 live.py runs, with Confirm / Dismiss review buttons that are saved to the database.
 
+Priority: a student (seat or track, per session) with repeated suspicious activity is
+flagged higher - activity = alerts plus repeated sightings merged into them; dismissed alerts
+do not count; an exchange alert counts for both students. 2 = Elevated, 3 or more = High.
+
   python scripts/dashboard.py                # then open http://localhost:8765
   python scripts/dashboard.py --port 9000
 
@@ -161,6 +165,9 @@ img.thumb{height:44px;border-radius:4px;cursor:zoom-in;display:block}
 button.del{border-color:var(--low);color:var(--low)} button.ok{border-color:var(--ok);color:var(--ok)} button.no{border-color:var(--no);color:var(--no)}
 .tag{padding:2px 8px;border-radius:10px;font-size:12px;border:1px solid currentColor}
 .confirmed{color:var(--ok)} .dismissed{color:var(--no)}
+.prio{padding:2px 8px;border-radius:10px;font-size:12px;font-weight:600;border:1px solid currentColor;white-space:nowrap}
+.prio.High{color:var(--low)} .prio.Elevated{color:var(--med)} .prio.Normal{color:var(--muted);font-weight:400}
+tr.hi td:first-child{box-shadow:inset 4px 0 0 var(--low)} tr.el td:first-child{box-shadow:inset 4px 0 0 var(--med)}
 #modal{position:fixed;inset:0;background:rgba(0,0,0,.8);display:none;align-items:center;justify-content:center;padding:16px}
 #modal img,#modal video{max-width:100%;max-height:100%} th.grp{text-align:left;color:var(--text);border-bottom:2px solid var(--line)}
 th.human,td.human{border-left:2px solid var(--accent)} a.clip{margin-right:6px;font-size:12px} .muted{color:var(--muted)} .empty{padding:24px;text-align:center;color:var(--muted)}
@@ -171,6 +178,7 @@ th.human,td.human{border-left:2px solid var(--accent)} a.clip{margin-right:6px;f
  <a class="btn" id="csv" href="/api/export.csv">Download CSV</a>
  <button class="del" id="delsess" style="display:none" onclick="delSession()">Delete session</button>
  <label><input type="checkbox" id="showdis"> Show dismissed (<span id="ndis">0</span>)</label>
+ <label><input type="checkbox" id="byprio"> Sort by priority</label>
  <span class="live"><span class="dot" id="dot"></span><span id="livetxt">idle</span></span>
  <div class="note">Alerts are prompts for human review only &mdash; the system never decides that a student cheated.
  Confidence = detector confidence &times; how consistently the behaviour was seen. Accuracy = confirmed &divide; reviewed.
@@ -184,12 +192,15 @@ th.human,td.human{border-left:2px solid var(--accent)} a.clip{margin-right:6px;f
   <div class="card"><div class="k">Average confidence</div><div class="v" id="c_conf">&ndash;</div></div>
   <div class="card"><div class="k">Alerts per minute (selected sessions)</div><div class="v" id="c_rate">&ndash;</div></div>
  </div>
+ <h2>Students needing attention</h2>
+ <p class="muted" style="margin:0 0 8px;font-size:13px">Repeated suspicious activity by the same student in one session: alerts plus repeated sightings, dismissed alerts excluded. 2 = Elevated, 3 or more = High.</p>
+ <div class="wrap"><table><thead><tr><th>Priority</th><th>Seat / track</th><th>Session</th><th>Activity count</th><th>Alerts</th><th>What was seen</th><th>Last alert</th></tr></thead><tbody id="prio"></tbody></table></div>
  <h2>By alert type</h2>
  <div class="wrap"><table><thead><tr><th>Alert</th><th>Count</th><th>Avg confidence</th><th>Confirmed</th><th>Dismissed</th><th>Not reviewed</th><th>Accuracy</th></tr></thead><tbody id="types"></tbody></table></div>
  <h2>Alerts (newest first)</h2>
  <div class="wrap"><table><thead>
-  <tr><th colspan="11" class="grp">Automatic detection (what the system observed)</th><th class="grp human">Invigilator decision</th><th class="grp"></th></tr>
-  <tr><th>Time</th><th>Session time</th><th>Point</th><th>Event</th><th>Seat / track</th><th>Confidence</th>
+  <tr><th colspan="12" class="grp">Automatic detection (what the system observed)</th><th class="grp human">Invigilator decision</th><th class="grp"></th></tr>
+  <tr><th>Time</th><th>Session time</th><th>Point</th><th>Event</th><th>Seat / track</th><th>Priority</th><th>Confidence</th>
   <th>Consistency</th><th>Lasted before alert</th><th>Sightings</th><th>Mode</th><th>Evidence</th><th class="human">Review</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>
  <h2>Robot observation log</h2>
  <div class="wrap"><table><thead><tr><th>Time</th><th>Session time</th><th>Point</th><th>What happened</th><th>Note</th></tr></thead><tbody id="obs"></tbody></table></div>
@@ -199,6 +210,19 @@ th.human,td.human{border-left:2px solid var(--accent)} a.clip{margin-right:6px;f
 const $=id=>document.getElementById(id); let alerts=[], sessions=[], obs=[], seen=null, sig='';
 const pct=x=>x==null?'–':(100*x).toFixed(0)+'%', num=(x,d=2)=>x==null?'–':x.toFixed(d);
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const PRIO_ELEVATED=2, PRIO_HIGH=3, RANK={High:2,Elevated:1,Normal:0};
+const level=n=>n>=PRIO_HIGH?'High':n>=PRIO_ELEVATED?'Elevated':'Normal';
+const people=a=>String(a.track_id).split('+').filter(p=>p&&p!=='INV');
+function priorities(all){            // session|person -> repeated-activity summary
+ const m={};
+ for(const a of all){ if(a.review==='dismissed') continue;
+  for(const p of people(a)){ const e=m[a.session+'|'+p]??={session:a.session,who:p,n:0,alerts:0,types:{},last:''};
+   e.n+=(a.sightings??1); e.alerts++; e.types[a.alert_name]=(e.types[a.alert_name]||0)+1; if(a.timestamp>e.last)e.last=a.timestamp; } }
+ return m;
+}
+function alertPrio(a,pm){ let best='Normal', n=0;
+ for(const p of people(a)){ const e=pm[a.session+'|'+p]; if(e&&RANK[level(e.n)]>=RANK[best]){best=level(e.n); n=Math.max(n,e.n);} }
+ return {lvl:best,n}; }
 async function load(){
  const s=$('session').value;
  const qs=s?'?session='+encodeURIComponent(s):'';
@@ -232,12 +256,21 @@ function render(){
   ||'<tr><td colspan="7" class="empty">No alerts yet</td></tr>';
  const ids=new Set(alerts.map(a=>a.id));
  const ndis=list.filter(a=>a.review==='dismissed').length; $('ndis').textContent=ndis;
- const shown=$('showdis').checked?list:list.filter(a=>a.review!=='dismissed');
- $('rows').innerHTML=shown.map(a=>{const lvl=a.confidence_level, isNew=seen&&!seen.has(a.id);
+ const pm=priorities(alerts);
+ const att=Object.values(pm).filter(e=>e.n>=PRIO_ELEVATED).sort((x,y)=>y.n-x.n||(y.last>x.last?1:-1));
+ $('prio').innerHTML=att.map(e=>`<tr class="${level(e.n)==='High'?'hi':'el'}"><td><span class="prio ${level(e.n)}">${level(e.n)}</span></td><td><b>${esc(e.who)}</b></td>
+  <td class="muted">${esc(e.session)}</td><td>${e.n}</td><td>${e.alerts}</td>
+  <td>${Object.entries(e.types).map(([k,v])=>esc(k)+(v>1?' &times;'+v:'')).join(', ')}</td><td>${esc(e.last.replace('T',' '))}</td></tr>`).join('')
+  ||'<tr><td colspan="7" class="empty">No student with repeated activity</td></tr>';
+ let shown=$('showdis').checked?list:list.filter(a=>a.review!=='dismissed');
+ if($('byprio').checked) shown=[...shown].sort((x,y)=>{const px=alertPrio(x,pm), py=alertPrio(y,pm);
+  return RANK[py.lvl]-RANK[px.lvl]||py.n-px.n||(y.timestamp>x.timestamp?1:-1);});
+ $('rows').innerHTML=shown.map(a=>{const lvl=a.confidence_level, isNew=seen&&!seen.has(a.id), pr=alertPrio(a,pm);
   const clips=JSON.parse(a.clips||'[]');
-  return `<tr class="${isNew?'new':''}"><td>${esc(a.timestamp.replace('T',' '))}</td><td>${num(a.t_session_s,1)} s</td>
+  return `<tr class="${isNew?'new':''} ${pr.lvl==='High'?'hi':pr.lvl==='Elevated'?'el':''}"><td>${esc(a.timestamp.replace('T',' '))}</td><td>${num(a.t_session_s,1)} s</td>
   <td>${esc(a.observation_point||'–')}</td>
   <td title="${esc(a.message)}${a.context_note?'\nContext: '+esc(a.context_note):''}"><b>${esc(a.alert_name)}</b></td><td>${a.track_id}</td>
+  <td><span class="prio ${pr.lvl}" title="${pr.n} suspicious observation(s) for this student in this session">${pr.lvl}${pr.n>1?' &middot; '+pr.n:''}</span></td>
   <td><span class="bar"><i class="${lvl}" style="width:${(a.confidence??0)*100}%"></i></span><span class="${lvl}">${num(a.confidence)} ${lvl}</span></td>
   <td>${pct(a.positive_ratio)}</td><td>${num(a.duration_s,1)} s</td><td>${a.sightings??1}${(a.sightings??1)>1?' (consolidated)':''}</td><td>${esc(a.mode)}</td>
   <td>${a.evidence?`<img class="thumb" loading="lazy" src="/evidence/${encodeURI(a.evidence)}" onclick="zoom(this.src)" alt="evidence">`:`<span class="muted">${a.review==='dismissed'?'deleted':'none'}</span>`}
@@ -245,7 +278,7 @@ function render(){
   <td class="human">${a.review?`<span class="tag ${a.review}">${a.review}</span> <button onclick="review(${a.id},null)">undo</button>`
    :`<button class="ok" onclick="review(${a.id},'confirmed')">Confirm</button> <button class="no" onclick="review(${a.id},'dismissed')">Dismiss</button>`}</td>
   <td><button class="del" title="Delete this alert" onclick="delAlert(${a.id})">Delete</button></td></tr>`}).join('')
-  ||'<tr><td colspan="13" class="empty">No alerts yet &mdash; run python scripts/live.py</td></tr>';
+  ||'<tr><td colspan="14" class="empty">No alerts yet &mdash; run python scripts/live.py</td></tr>';
  const kinds={arrive:'Arrived at point',leave:'Left point',insufficient_view:'Insufficient view - asked to move',
   permitted_device:'Permitted device seen (logged, not alerted)',authorised_exchange:'Authorised exchange with invigilator (logged, not alerted)'};
  $('obs').innerHTML=obs.map(o=>`<tr><td>${esc(o.timestamp.replace('T',' '))}</td><td>${num(o.t_session_s,1)} s</td><td>${esc(o.point)}</td><td>${esc(kinds[o.kind]||o.kind)}</td><td class="muted">${esc(o.note)}</td></tr>`).join('')
@@ -265,7 +298,7 @@ function delSession(){const s=$('session').value, n=alerts.length;
 
 This cannot be undone.`)){$('session').value=''; post('/api/delete_session',{session:s});}}
 function zoom(src){$('big').src=src+(src.endsWith('.webp')||src.endsWith('.gif')?'?'+Date.now():''); $('modal').style.display='flex';}
-$('session').onchange=()=>{sig='';seen=null;load()}; $('type').onchange=render; $('showdis').onchange=render;
+$('session').onchange=()=>{sig='';seen=null;load()}; $('type').onchange=render; $('showdis').onchange=render; $('byprio').onchange=render;
 load(); setInterval(load,2000);
 </script></body></html>"""
 
