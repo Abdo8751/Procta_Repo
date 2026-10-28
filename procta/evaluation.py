@@ -1,12 +1,15 @@
 """Event-level evaluation of alerts against labelled ground-truth episodes.
 
-Ground truth CSV columns: event_type,start_s,end_s[,note]
+Ground truth CSV columns: event_type,start_s,end_s[,seat][,note]
 Alerts CSV columns:       track_id,event_type,t_alert,t_start,confidence,positive_ratio
 
-Matching rule (per event type, track ids ignored because staged sessions have one
-student per camera):
-  * a GT episode is a TARGET if it lasts >= persistence_s (shorter ones are
-    "should-not-alert" hard negatives, e.g. a 1 s glance at the phone)
+Matching rule (per event type):
+  * when a GT row has a seat (group sessions: F1..B3, pairs "B2+F2" for exchanges), an
+    alert only matches it if the alert's seat is the SAME (pairs compared order-free);
+    GT rows without a seat (single-participant sessions) match on type only
+  * a GT episode is a TARGET if it lasts >= the event's persistence (3 s; 1 s for
+    material_exchange) - shorter ones are "should-not-alert" hard negatives, e.g. a 1 s
+    glance at the phone; lookalike_* rows are never targets
   * an alert is a TRUE alert if t_alert falls in [start, end + tolerance] of a
     TARGET episode of the same type, otherwise it is a FALSE alarm
   * an episode is DETECTED if it has >= 1 true alert
@@ -27,13 +30,27 @@ import statistics as st
 from collections import defaultdict
 
 
+def norm_seat(seat):
+    """'f2+B2' -> 'B2+F2'; '' / None -> None."""
+    if seat is None or isinstance(seat, int):
+        return None
+    parts = sorted(p.strip().upper() for p in str(seat).split("+") if p.strip())
+    return "+".join(parts) or None
+
+
 def load_gt(path):
     rows = []
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         for r in csv.DictReader(f):
-            rows.append({"event_type": r["event_type"].strip(),
-                         "start_s": float(r["start_s"]), "end_s": float(r["end_s"])})
+            rows.append({"event_type": r["event_type"].strip(), "start_s": float(r["start_s"]),
+                         "end_s": float(r["end_s"]), "seat": norm_seat(r.get("seat"))})
     return rows
+
+
+def alert_rows(alerts):
+    """temporal.Alert list -> rows for evaluate(); the seat is the identity when it is a seat label."""
+    return [{"event_type": a.event_type, "t_alert": a.t_alert,
+             "seat": norm_seat(a.track_id) if isinstance(a.track_id, str) else None} for a in alerts]
 
 
 def load_alerts(path):
@@ -45,18 +62,25 @@ def load_alerts(path):
     return rows
 
 
-def evaluate(alerts, gt, duration_s, persistence_s=3.0, tolerance_s=1.0, event_types=None):
+def evaluate(alerts, gt, duration_s, persistence_s=3.0, tolerance_s=1.0, event_types=None,
+             persistence_by_event=None):
+    """persistence_by_event: {event_type: seconds} overriding persistence_s (e.g. Config.event_persistence_s)."""
     types = sorted(event_types or {g["event_type"] for g in gt} | {a["event_type"] for a in alerts})
+    types = [t for t in types if not t.startswith("lookalike")]
+    pers = persistence_by_event or {}
     per = {}
     tot = defaultdict(float)
     all_lat = []
     for ev in types:
-        targets = [g for g in gt if g["event_type"] == ev and g["end_s"] - g["start_s"] >= persistence_s]
+        p_ev = pers.get(ev, persistence_s)
+        targets = [g for g in gt if g["event_type"] == ev and g["end_s"] - g["start_s"] >= p_ev]
         hits = defaultdict(list)
         n_true = n_false = 0
         for a in (a for a in alerts if a["event_type"] == ev):
+            a_seat = norm_seat(a.get("seat"))
             m = next((i for i, g in enumerate(targets)
-                      if g["start_s"] <= a["t_alert"] <= g["end_s"] + tolerance_s), None)
+                      if g["start_s"] <= a["t_alert"] <= g["end_s"] + tolerance_s
+                      and (not g.get("seat") or g["seat"] == a_seat)), None)
             if m is None:
                 n_false += 1
             else:
@@ -92,6 +116,16 @@ def evaluate(alerts, gt, duration_s, persistence_s=3.0, tolerance_s=1.0, event_t
         "alerts_per_episode": tot["true_alerts"] / tot["detected"] if tot["detected"] else float("nan"),
     }
     return per
+
+
+def evaluate_per_seat(alerts, gt, duration_s, persistence_s=3.0, tolerance_s=1.0, event_types=None,
+                      persistence_by_event=None):
+    """{seat: evaluate(...)} over the seats that appear in the GT or the alerts (pairs as their own key)."""
+    seats = sorted({g["seat"] for g in gt if g.get("seat")} | {norm_seat(a.get("seat")) for a in alerts
+                                                                 if norm_seat(a.get("seat"))})
+    return {s: evaluate([a for a in alerts if norm_seat(a.get("seat")) == s], [g for g in gt if g.get("seat") == s],
+                        duration_s, persistence_s, tolerance_s, event_types, persistence_by_event)
+            for s in seats}
 
 
 COLS = ["alerts", "target_episodes", "detected", "precision", "recall", "missed_event_rate",

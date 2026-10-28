@@ -25,6 +25,7 @@ class ObservationPoint:
     ignore_zones: list = field(default_factory=list)   # [x1, y1, x2, y2] as fractions of the image
     seat_zones: dict = field(default_factory=dict)     # seat id -> [x1, y1, x2, y2] (+ optional "invigilator")
     on_route: bool = True                  # False: a fixed recording viewpoint, not cycled with n/p
+    thresholds: dict = field(default_factory=dict)     # per-viewpoint Config overrides, e.g. {"head_yaw_thr": 0.12}
 
 
 @dataclass

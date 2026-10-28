@@ -278,3 +278,49 @@ def test_exchange_with_invigilator_is_logged_not_signalled_in_context_mode():
     ctx = SignalExtractor(Config(), "context", context=ExamContext(), point=pt)
     assert not any(ev == "material_exchange" for f in fr for _, ev in ctx(f))
     assert ctx.suppressed["authorised exchange with invigilator"] > 0 and ctx.notes[0][2] == "authorised_exchange"
+
+
+# ---- Phase 3: seat-aware evaluation ---------------------------------------------------------
+
+def test_evaluation_matches_type_and_seat():
+    from procta.evaluation import evaluate, evaluate_per_seat
+    gt = [{"event_type": "phone_in_hand", "start_s": 10, "end_s": 20, "seat": "F2"},
+          {"event_type": "material_exchange", "start_s": 40, "end_s": 41.5, "seat": "B2+F2"},
+          {"event_type": "lookalike_calculator", "start_s": 50, "end_s": 60, "seat": "F3"}]
+    alerts = [{"event_type": "phone_in_hand", "t_alert": 13, "seat": "F2"},            # right seat
+              {"event_type": "phone_in_hand", "t_alert": 14, "seat": "F3"},            # wrong seat -> false
+              {"event_type": "material_exchange", "t_alert": 41, "seat": "F2+B2"},     # pair order-free
+              {"event_type": "phone_in_hand", "t_alert": 55, "seat": "F3"}]            # calculator lookalike
+    m = evaluate(alerts, gt, 120, 3.0, 1.0, persistence_by_event={"material_exchange": 1.0})
+    assert m["phone_in_hand"]["recall"] == 1.0 and m["phone_in_hand"]["false_alerts"] == 2
+    assert m["material_exchange"]["detected"] == 1 and m["material_exchange"]["target_episodes"] == 1
+    assert "lookalike_calculator" not in m
+    per = evaluate_per_seat(alerts, gt, 120, 3.0, 1.0, persistence_by_event={"material_exchange": 1.0})
+    assert per["F2"]["phone_in_hand"]["precision"] == 1.0 and per["F3"]["phone_in_hand"]["false_alerts"] == 2
+    # GT without a seat (single-participant sessions): type-only matching as before
+    m1 = evaluate([{"event_type": "phone_in_hand", "t_alert": 13, "seat": None}],
+                  [{"event_type": "phone_in_hand", "start_s": 10, "end_s": 20, "seat": None}], 60)
+    assert m1["phone_in_hand"]["recall"] == 1.0
+
+
+def test_draft_labels_shift_by_hand_raise():
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    from draft_labels import draft
+    rows = [{"start_s": "0", "end_s": "5", "event_type": "sync", "seat": "", "instruction": "raise hands"},
+            {"start_s": "20", "end_s": "30", "event_type": "phone_in_hand", "seat": "F2", "instruction": "phone"},
+            {"start_s": "40", "end_s": "41", "event_type": "material_exchange", "seat": "B2+F2", "instruction": "pass"},
+            {"start_s": "50", "end_s": "60", "event_type": "none", "seat": "", "instruction": "write"}]
+    d = draft(rows, video_sync=12.5)
+    assert [(x["event_type"], x["start_s"], x["seat"]) for x in d] == [("phone_in_hand", 32.5, "F2"),
+                                                                       ("material_exchange", 52.5, "B2+F2")]
+
+
+def test_hands_in_lap_with_head_raised_is_not_looking_down_and_points_override_thresholds():
+    cfg = Config()
+    calib = cfg.calibration_frames
+    sig = SignalExtractor(cfg, "improved")                     # sitting back, head up, hands in the lap
+    fr = _frames(lambda i: [_body(1, 500, 100, pitch=0.0 if i < calib else -0.2,
+                                  wrist_conf=0.9 if i < calib else 0.05)], calib + 40)
+    assert not any((1, "looking_down") in sig(f) for f in fr)
+    pt = ObservationPoint("T1", thresholds={"head_yaw_thr": 0.12})
+    assert SignalExtractor(cfg, "improved", point=pt).cfg.head_yaw_thr == 0.12 and cfg.head_yaw_thr == 0.25

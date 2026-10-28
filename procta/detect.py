@@ -13,6 +13,7 @@ makes baseline-vs-improvement comparisons fair: both see identical detections.
 """
 
 import json
+import threading
 from pathlib import Path
 
 import numpy as np
@@ -42,6 +43,39 @@ class Detector:
         self._frame_idx = 0
         self._cached_phones = []
         self._cached_objects = []
+        self._lock = threading.Lock()
+        self._job = None                      # async: (frame, t) waiting for the worker
+        self._wake = threading.Event()
+        if cfg.async_objects:
+            threading.Thread(target=self._worker, daemon=True).start()
+
+    def _detect_objects(self, frame, t):
+        cfg = self.cfg
+        if self.world:
+            objects = self._world_objects(frame, t)
+            phones = [{"box": o["box"], "conf": o["conf"]} for o in objects if o["cls"] == "cell phone"]
+        else:
+            r = self.det.predict(frame, classes=[PHONE_CLASS_ID], conf=cfg.phone_conf,
+                                 imgsz=cfg.det_imgsz or cfg.imgsz, verbose=False)[0]
+            phones = []
+            if r.boxes is not None:
+                for xyxy, conf in zip(r.boxes.xyxy.cpu().numpy(), r.boxes.conf.cpu().numpy()):
+                    phones.append({"box": [round(float(v), 1) for v in xyxy], "conf": round(float(conf), 3)})
+            objects = [{"cls": "cell phone", **p} for p in phones]
+        return phones, objects
+
+    def _worker(self):
+        """Async mode: always works on the newest submitted frame; older ones are skipped."""
+        while True:
+            self._wake.wait()
+            with self._lock:
+                job, self._job = self._job, None
+                self._wake.clear()
+            if job is None:
+                continue
+            phones, objects = self._detect_objects(*job)
+            with self._lock:
+                self._cached_phones, self._cached_objects = phones, objects
 
     def _world_objects(self, frame, t):
         cfg = self.cfg
@@ -75,18 +109,12 @@ class Detector:
     def __call__(self, frame, t: float) -> dict:
         cfg = self.cfg
         if self._frame_idx % cfg.det_frame_skip == 0:
-            if self.world:
-                objects = self._world_objects(frame, t)
-                phones = [{"box": o["box"], "conf": o["conf"]} for o in objects if o["cls"] == "cell phone"]
+            if cfg.async_objects:
+                with self._lock:
+                    self._job = (frame.copy(), t)
+                    self._wake.set()
             else:
-                r = self.det.predict(frame, classes=[PHONE_CLASS_ID], conf=cfg.phone_conf,
-                                     imgsz=cfg.det_imgsz or cfg.imgsz, verbose=False)[0]
-                phones = []
-                if r.boxes is not None:
-                    for xyxy, conf in zip(r.boxes.xyxy.cpu().numpy(), r.boxes.conf.cpu().numpy()):
-                        phones.append({"box": [round(float(v), 1) for v in xyxy], "conf": round(float(conf), 3)})
-                objects = [{"cls": "cell phone", **p} for p in phones]
-            self._cached_phones, self._cached_objects = phones, objects
+                self._cached_phones, self._cached_objects = self._detect_objects(frame, t)
         self._frame_idx += 1
 
         p = self.pose.track(frame, persist=True, classes=[PERSON_CLASS_ID], imgsz=cfg.imgsz,
@@ -108,8 +136,9 @@ class Detector:
                             for (x, y), c in zip(kxy[i], kconf[i])],
                 })
         h, w = frame.shape[:2]
-        return {"t": round(t, 4), "wh": [w, h], "persons": persons, "phones": list(self._cached_phones),
-                "objects": list(self._cached_objects)}
+        with self._lock:
+            phones, objects = list(self._cached_phones), list(self._cached_objects)
+        return {"t": round(t, 4), "wh": [w, h], "persons": persons, "phones": phones, "objects": objects}
 
 
 def _iou(a, b):

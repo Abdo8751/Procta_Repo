@@ -30,6 +30,8 @@ class Config:
     world_classes: tuple = ("cell phone", "calculator", "sheet of paper", "book")
     world_conf: float = 0.1           # low on purpose: YOLO-World proposes, CLIP decides
     clip_phone_min: float = 0.35      # CLIP p(smartphone) needed to keep a box as a phone
+    async_objects: bool = False       # live only: object detector in a background thread, so the slow
+                                      # world+CLIP step never blocks pose tracking / the display
 
     # --- per-frame event signals ---
     phone_proximity_factor: float = 1.5     # wrist-to-phone distance < factor * phone diagonal
@@ -41,10 +43,12 @@ class Config:
     calibration_frames: int = 30
     head_yaw_thr: float = 0.25              # |yaw - calibrated yaw|, yaw = (nose_x - eye-mid x) / eye distance
     standing_ratio: float = 1.8             # person box taller than this x seat zone height = standing (invigilator)
-    # looking_down: head lowered BEYOND the calibrated writing pose AND hands not on the desk
-    head_pitch_thr: float = 0.08            # pitch - calibrated pitch; pitch = (eye y - ear y) / shoulder width
-    hands_drop_thr: float = 0.35            # wrists lower than calibrated writing position by this x shoulder width
+    # looking_down: hands go below the desk while the head stays at (or below) writing level
+    head_up_tol: float = 0.05               # pitch - writing pitch must be >= -this (head not raised);
+                                            # pitch = (eye y - ear y) / shoulder width
+    hands_drop_thr: float = 0.20            # wrists lower than the writing position by this x shoulder width
                                             # (or not visible at all = below the desk edge)
+    hands_ref_s: float = 60.0               # writing position = rolling median wrist height of the last 60 s
     # material_exchange: wrists of two different people meet between them
     exchange_wrist_k: float = 0.6           # wrist-to-wrist distance < k x mean shoulder width of the two
     exchange_paper_bonus: float = 0.2       # confidence bonus when a sheet of paper is at the wrists

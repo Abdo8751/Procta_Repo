@@ -25,7 +25,7 @@ sys.path.insert(0, str(ROOT))
 from procta.config import Config, EVENT_TYPES, load_config  # noqa: E402
 from procta.context import ExamContext  # noqa: E402
 from procta.detect import load_detections  # noqa: E402
-from procta.evaluation import evaluate, load_gt, to_markdown  # noqa: E402
+from procta.evaluation import alert_rows, evaluate, load_gt, to_markdown  # noqa: E402
 from procta.temporal import MODES, run_policy  # noqa: E402
 
 FIELDS = ["track_id", "event_type", "t_alert", "t_start", "confidence", "positive_ratio"]
@@ -106,8 +106,8 @@ def main():
         write_alerts(out / f"alerts_{mode}.csv", alerts)
         print(f"{mode:9s}: {len(alerts)} alerts")
         if args.gt:
-            rows = [{"event_type": a.event_type, "t_alert": a.t_alert} for a in alerts]
-            m = evaluate(rows, load_gt(args.gt), duration, cfg.persistence_s, args.tolerance, EVENT_TYPES)
+            m = evaluate(alert_rows(alerts), load_gt(args.gt), duration, cfg.persistence_s, args.tolerance,
+                         EVENT_TYPES, cfg.event_persistence_s)
             all_metrics[mode] = m
             report.append(to_markdown(m, mode) + "\n")
         if args.video:

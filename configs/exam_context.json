@@ -164,7 +164,11 @@
           0.6053,
           0.404
         ]
-      }
+      },
+      "thresholds": {
+        "head_yaw_thr": 0.12
+      },
+      "thresholds_note": "Room camera: faces ~3x smaller than at the desk webcam, so a real head turn gives yaw offsets of 0.15-0.2 (F1 looking at F2, 3-12 s); 0.25 missed it. Tuned on Test_1 by inspection - validate on a held-out session."
     }
   ],
   "seats_note": "S1 is the single-webcam setup (points A-C). F1-B3 are the 6-person room of Test_1: F = front row, B = back row, numbered left to right in the camera image. Seat zones (geometry) are per observation point, see point T1; draw them with scripts/define_seats.py."

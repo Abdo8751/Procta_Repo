@@ -32,7 +32,7 @@ sys.path.insert(0, str(ROOT))
 from procta.config import EVENT_TYPES, load_config  # noqa: E402
 from procta.context import ExamContext  # noqa: E402
 from procta.detect import load_detections  # noqa: E402
-from procta.evaluation import COLS, aggregate, evaluate, load_gt  # noqa: E402
+from procta.evaluation import COLS, aggregate, alert_rows, evaluate, load_gt  # noqa: E402
 from procta.temporal import MODES, run_policy  # noqa: E402
 
 NAMES = {"frame": "B0 frame-level", "baseline": "B1 3-s persistence",
@@ -78,8 +78,9 @@ def main():
         point = ctx.point(r.get("point", "").strip()) if r.get("point") else None
         for m in MODES:
             alerts, _, sig = run_policy(frames, m, cfg, context=ctx, point=point, return_events=True)
-            per_mode[m].append(evaluate([{"event_type": a.event_type, "t_alert": a.t_alert} for a in alerts],
-                                        gt, dur, cfg.persistence_s, args.tolerance, EVENT_TYPES))
+            per_mode[m].append(evaluate(alert_rows(alerts),
+                                        gt, dur, cfg.persistence_s, args.tolerance, EVENT_TYPES,
+                                        cfg.event_persistence_s))
             if m == "context":
                 for k, v in sig.suppressed.items():
                     suppressed[k] = suppressed.get(k, 0) + v

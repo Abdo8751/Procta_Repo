@@ -65,3 +65,17 @@ Checks run by the AI on Test_1 (author to verify): YOLO-World alone labels calcu
 (55-85 s) world+CLIP found only the two real phones and recognised all four calculators, where the
 COCO detector produced 447 frames of "phone in hand" at F2. Normal writing (60-90 s): no
 looking_down or material_exchange signal. Speed: 0.33 s per processed frame (~22 min whole video).
+
+## 2026-10-28 - Fixes after the author's Test_1 review + Phase 3 code
+
+| File | What the AI did |
+|---|---|
+| `procta/detect.py`, `procta/config.py`, `scripts/live.py` | `async_objects`: in live.py the object detector runs in a background thread (newest frame only), so world+CLIP no longer blocks pose/display; `--sync-objects` to disable. |
+| `scripts/live.py` | `--detections`: replays detections saved by extract_detections.py instead of running the networks (smooth real-time demo, identical input to the offline evaluation); paced playback, +/- = speed 0.25x-16x; evidence still only rendered when an alert fires. |
+| `procta/signals.py`, `procta/config.py` | `looking_down` rule changed after the author reported a miss (F2 looking at a phone under the table at 29 s): Test_1 data showed the head does not go lower than when writing but the hands drop 0.3-0.4 shoulder widths. New rule: hands below the desk (hidden or > 0.2 shoulder widths below the writing position) AND head not raised. Writing position = rolling 60 s median (the first 2 s contained a look-around for F1). |
+| `procta/context.py`, `procta/signals.py`, `configs/exam_context.json` | Per-viewpoint threshold overrides (`thresholds`); point T1 uses `head_yaw_thr` 0.12 because F1's real head turn at 3-12 s gave yaw offsets 0.15-0.2 in the wide room view (missed at 0.25). Tuned on Test_1 by inspection; to be validated on a held-out session. |
+| `scripts/label_video.py` | Rewritten for groups: seat selection (click or [ ] / - =), keys 6-0 for looking_down, material_exchange and lookalikes, GT format `event_type,start_s,end_s,seat,note`. |
+| `scripts/draft_labels.py` | New. Draft GT from a group protocol, shifted by the video second of the hand raise. |
+| `procta/evaluation.py`, `scripts/run_offline.py`, `scripts/evaluate_sessions.py` | Seat-aware matching (type AND seat; pairs order-free; type-only when GT has no seat), per-event persistence for targets, lookalike rows never targets, `evaluate_per_seat`, `alert_rows`. |
+| `scripts/check_and_run.ps1`, `scripts/check_and_run.sh` | Run tests, start the dashboard, replay Test_1 with the current code. |
+| `tests/test_week5.py` | Tests: seat-aware evaluation, draft-label shift, hands in lap with head raised is not looking_down, per-point threshold override. |

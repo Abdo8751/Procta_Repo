@@ -5,6 +5,8 @@
   python scripts/live.py --mode frame                   # frame-level baseline (B0)
   python scripts/live.py --mode baseline --record       # 3-s rule (B1), also save the raw video
   python scripts/live.py --mode context --video data/videos/s04.mp4   # replay a recording as if live
+  python scripts/live.py --mode context --video data/videos/Test_1.mp4 --start-point T1 \
+      --detections data/detections/Test_1_world.jsonl   # smooth demo: replay the saved detections
 
 Robot route (configs/exam_context.json -> observation_points). The operator plays the robot:
   n / p   move to the next / previous permitted observation point (detection re-calibrates)
@@ -96,8 +98,13 @@ def main():
     ap.add_argument("--det-imgsz", type=int, default=0, help="object detector input size (0 = --imgsz)")
     ap.add_argument("--object-detector", choices=["coco", "world"], default="coco",
                     help="world = YOLO-World + CLIP: tells phones from calculators (slower)")
+    ap.add_argument("--sync-objects", action="store_true",
+                    help="run the object detector in the main loop (default: background thread, lower latency)")
     ap.add_argument("--stride", type=int, default=1, help="--video only: process every Nth frame (video time kept)")
     ap.add_argument("--video", default=None, help="replay a video file as if it were the live camera")
+    ap.add_argument("--detections", default=None,
+                    help="--video only: use detections saved by extract_detections.py instead of running the "
+                         "networks (smooth, real-time replay; identical input to the offline evaluation)")
     ap.add_argument("--headless", action="store_true", help="no window (tests / batch replay)")
     ap.add_argument("--width", type=int, default=1280)
     ap.add_argument("--height", type=int, default=720)
@@ -105,6 +112,7 @@ def main():
 
     cfg = Config(imgsz=args.imgsz, det_imgsz=args.det_imgsz, det_frame_skip=args.det_skip,
                  object_detector=args.object_detector, world_model=str(ROOT / "models/yolov8s-worldv2.pt"),
+                 async_objects=not args.sync_objects,
                  det_model=str(ROOT / "models/yolov8n.pt"), pose_model=str(ROOT / "models/yolov8n-pose.pt"))
     ctx = ExamContext.load(args.context)
     # robot route = points marked on_route; a fixed viewpoint (e.g. a recorded room with seat
@@ -127,7 +135,16 @@ def main():
     alert_log = AlertLog(ROOT / "results/alerts.db", name, args.mode, started_at, args.camera,
                          f"{first.shape[1]}x{first.shape[0]}" if ok else "",
                          {**cfg.to_dict(), "exam_context": ctx.to_dict() if args.mode == "context" else None})
-    det = Detector(cfg)
+    cached = None
+    if args.detections:                      # replay saved detections: no neural networks in the loop
+        import bisect
+        from procta.detect import load_detections
+        _, cframes = load_detections(Path(args.detections))
+        cached = {f["frame"]: f for f in cframes}
+        cached_idx = sorted(cached)
+        det = None
+    else:
+        det = Detector(cfg)
     sig = SignalExtractor(cfg, signal_mode(args.mode), context=ctx, point=route[pi])
     pol = make_policy(args.mode, cfg)
     temporal = args.mode in ("improved", "context")
@@ -176,6 +193,11 @@ def main():
     last_note = {}                      # (identity, kind) -> time of the last logged context note
     stride, paused, last_img = max(1, args.stride), False, None
     n_total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) if args.video else 0
+    speed = 1.0                         # cached replay: playback speed (real time = 1)
+    clock = {"wall": time.time(), "video": 0.0}     # pacing reference for cached replay
+
+    def reset_clock(t_video):
+        clock["wall"], clock["video"] = time.time(), t_video
 
     def seek(seconds):
         """Video replay: jump in time. Running episodes end and per-person motion history is
@@ -194,10 +216,11 @@ def main():
         cap.set(cv2.CAP_PROP_POS_FRAMES, target)
         n_frame = target
         last_img = None                         # paused: show the frame at the new position once
+        reset_clock(target / vfps)
 
     def handle_key(key, t):
         """-> True to quit."""
-        nonlocal show_pose, paused, stride
+        nonlocal show_pose, paused, stride, speed
         if key == ord("q"):
             return True
         if key == ord("k"):
@@ -207,13 +230,17 @@ def main():
         if args.video:
             if key == ord(" "):
                 paused = not paused
+                reset_clock(n_frame / vfps)
             jump = {ord("j"): -10, ord("l"): 10, ord(","): -2, ord("."): 2}.get(key)
             if jump:
                 seek(jump)
-            if key in (ord("+"), ord("=")):
-                stride = min(stride + 1, 15)
-            if key in (ord("-"), ord("_")):
-                stride = max(stride - 1, 1)
+            if key in (ord("+"), ord("="), ord("-"), ord("_")):
+                up = key in (ord("+"), ord("="))
+                if cached is not None:               # cached replay: real playback speed
+                    speed = min(speed * 2, 16.0) if up else max(speed / 2, 0.25)
+                    reset_clock(n_frame / vfps)
+                else:                                # networks in the loop: analyse every Nth frame
+                    stride = min(stride + 1, 15) if up else max(stride - 1, 1)
         return False
 
     try:
@@ -226,7 +253,12 @@ def main():
                 if handle_key(cv2.waitKey(50) & 0xFF, n_frame / vfps):
                     break
                 continue
-            if args.video and stride > 1 and n_frame:
+            if cached is not None:              # only frames with saved detections are shown
+                i = bisect.bisect_left(cached_idx, n_frame)
+                nxt = cached_idx[i] if i < len(cached_idx) else n_total
+                while n_frame < nxt and cap.grab():
+                    n_frame += 1
+            elif args.video and stride > 1 and n_frame:
                 for _ in range(stride - 1):     # skipped frames: decode only, video time advances
                     if cap.grab():
                         n_frame += 1
@@ -245,10 +277,15 @@ def main():
                 times.append(t)
 
             point = route[pi]
-            dets = det(frame, t)
+            if cached is not None:
+                c = cached.get(n_frame - 1)
+                dets = {**c, "t": t, "persons": [dict(p) for p in c["persons"]]} if c else \
+                    {"t": t, "wh": [frame.shape[1], frame.shape[0]], "persons": [], "phones": [], "objects": []}
+            else:
+                dets = det(frame, t)
             signals = sig(dets)
             alerts = pol.step(t, signals, sig.present)
-            img = annotate(frame, dets, signals, show_pose=show_pose)
+            img = annotate(frame, dets, signals, show_pose=show_pose) if alerts else None   # evidence still
 
             for a in alerts:
                 who = a.track_id if isinstance(a.track_id, str) else f"track{a.track_id}"
@@ -317,13 +354,13 @@ def main():
                 who = p.get("key", p["id"])
                 yaw, pitch = sig.head_yaw.get(who), sig.head_pitch.get(who)
                 if yaw is not None:
-                    turned = abs(yaw) > cfg.head_yaw_thr
+                    turned = abs(yaw) > sig.cfg.head_yaw_thr
                     cv2.putText(img, f"yaw {yaw:+.2f} ({'image right' if yaw > 0 else 'image left'})",
                                 (int(p["box"][0]), int(p["box"][1]) + 18),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255) if turned else (0, 200, 0), 1)
                 if pitch is not None:
-                    down = pitch > cfg.head_pitch_thr
-                    cv2.putText(img, f"pitch {pitch:+.2f} ({'lower than writing' if down else 'writing pose'})",
+                    down = (who, "looking_down") in signals
+                    cv2.putText(img, f"pitch {pitch:+.2f} ({'hands below desk' if down else 'writing pose'})",
                                 (int(p["box"][0]), int(p["box"][1]) + 36),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255) if down else (0, 200, 0), 1)
             draw_temporal(img, pol, t, cfg)
@@ -333,8 +370,9 @@ def main():
                 cv2.putText(img, "no person detected - sit further back / more light", (10, img.shape[0] - 35),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
             supp = sum(sig.suppressed.values())
+            spd = f"speed {speed:g}x (saved detections)" if cached is not None else f"every {stride}. frame"
             vid = (f"  {int(t) // 60}:{int(t) % 60:02d}/{int(n_total / vfps) // 60}:{int(n_total / vfps) % 60:02d}"
-                   f"  speed x{stride}  [space pause  j/l -/+10s  +/- speed]") if args.video else ""
+                   f"  {spd}  [space pause  j/l -/+10s  +/- speed]") if args.video else ""
             cv2.putText(img, f"FPS {fps:.1f}  t={t:.0f}s  mode={args.mode}  point {point.id}"
                              f"{f'  context-suppressed {supp}' if args.mode == 'context' else ''}{vid}",
                         (10, img.shape[0] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
@@ -343,7 +381,10 @@ def main():
                 key = 255
             else:
                 cv2.imshow("PROCTA live", img)
-                key = cv2.waitKey(1) & 0xFF
+                wait = 1
+                if cached is not None:          # pace the replay to (speed x) real time
+                    wait = max(1, int(((clock["wall"] + (t - clock["video"]) / speed) - time.time()) * 1000))
+                key = cv2.waitKey(min(wait, 500)) & 0xFF
             if handle_key(key, t):
                 break
     finally:

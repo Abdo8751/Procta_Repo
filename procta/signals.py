@@ -22,11 +22,18 @@ Measured against each student's own yaw during seat calibration (camera may be o
 to one side). In profile one eye disappears, which also counts as turned.
 
 looking_down: writing on one's own paper is normal, so the reference is each student's own
-calibrated WRITING pose. Head pitch = (eye height - ear height) / shoulder width: when the
-head tips forward the ears rise relative to the eyes (they sit ~8 cm behind them), which is
-a larger and steadier change than nose vs eyes. The event needs BOTH the head lowered
-beyond the writing pose AND the hands off the desk (wrists not visible = hidden by the desk
-edge, or clearly lower than in the writing pose) - i.e. looking at the lap / under the desk.
+WRITING pose. Head pitch = (eye height - ear height) / shoulder width (the ears rise relative
+to the eyes when the head tips forward). The event needs the hands BELOW the desk (wrists not
+visible, or lower than the writing position by hands_drop_thr shoulder widths) while the head
+stays at writing level or lower (not raised) - i.e. looking at something in the lap / under
+the desk. Test_1 showed that the head does NOT go lower than when writing (F2 at 29 s: pitch
+change ~0, hands 0.3-0.4 shoulder widths lower), so "head lower than writing" is not required.
+The writing hand position is the rolling median of the last hands_ref_s seconds (writing
+dominates any minute of an exam), not the first 2 s, which can contain a look-around.
+
+Per-viewpoint thresholds: an observation point may override Config values (point.thresholds),
+because a wide room camera sees faces ~3x smaller than a desk webcam, so the same head turn
+gives a smaller yaw.
 
 material_exchange: a wrist of one person and a wrist of a DIFFERENT person (different seats,
 also front <-> back row) come within exchange_wrist_k x their mean shoulder width, at a point
@@ -38,7 +45,8 @@ Calculators (object_detector="world") never produce phone events; in context mod
 calculator at a student's hand is logged as a note when it is a permitted device.
 """
 
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, deque
+from dataclasses import replace
 
 import numpy as np
 
@@ -89,8 +97,9 @@ class SignalExtractor:
         if mode == "context" and context is None:
             from .context import ExamContext
             context = ExamContext.load()
-        self.cfg, self.mode, self.context = cfg, mode, context
+        self.base_cfg, self.mode, self.context = cfg, mode, context
         self.point = point if point is not None else (context.observation_points[0] if context else None)
+        self.cfg = self._cfg_for(self.point)
         self.suppressed = Counter()             # context mode: observations dropped, by reason
         self.prev_shoulder = {}                 # track -> (xy, t)
         self.seat_samples = defaultdict(list)
@@ -103,11 +112,18 @@ class SignalExtractor:
         self.pose_baseline = {}                 # identity -> (pitch, wrist height) of the writing pose
         self.head_pitch = {}                    # identity -> latest pitch offset (for the live overlay)
         self.seat_width = {}                    # identity -> calibrated person box width (px)
+        self.hand_hist = defaultdict(deque)     # identity -> [(t, wrist height)] for the rolling writing position
         self.notes = []                         # context mode: (t, identity, kind, text) worth logging, not alerting
+
+    def _cfg_for(self, point):
+        th = getattr(point, "thresholds", None) or {}
+        return replace(self.base_cfg, **{k: v for k, v in th.items() if hasattr(self.base_cfg, k)})
 
     def set_point(self, point):
         """New observation point = new viewpoint: re-calibrate seat and head pose."""
         self.point = point
+        self.cfg = self._cfg_for(point)
+        self.hand_hist.clear()
         self.prev_shoulder.clear()
         self.seat_samples.clear()
         self.seat_baseline.clear()
@@ -308,15 +324,22 @@ class SignalExtractor:
                 if np.linalg.norm(c - self.seat_baseline[tid]) > drift_thr:
                     out[(tid, "unusual_seat_movement")] = pe["conf"]
 
-                # ---- event 6: looking down below the desk (beyond the writing pose, hands off the desk)
+                # ---- event 6: looking down below the desk (hands below the desk, head not raised)
                 p0, h0 = self.pose_baseline.get(tid, (None, None))
+                hh = self.hand_hist[tid]
+                while hh and t - hh[0][0] > cfg.hands_ref_s:
+                    hh.popleft()
+                if hh and t - hh[0][0] >= min(10.0, cfg.hands_ref_s):
+                    h0 = float(np.median([x[1] for x in hh]))        # rolling writing position
+                if wh_rel is not None:
+                    hh.append((t, wh_rel))
                 if pitch is None or p0 is None:
                     self.head_pitch.pop(tid, None)
                 else:
                     dp = pitch[0] - p0
                     self.head_pitch[tid] = dp
-                    hands_off_desk = wh_rel is None or (h0 is not None and wh_rel - h0 > cfg.hands_drop_thr)
-                    if dp > cfg.head_pitch_thr and hands_off_desk:
+                    hands_below = wh_rel is None or (h0 is not None and wh_rel - h0 > cfg.hands_drop_thr)
+                    if dp >= -cfg.head_up_tol and hands_below:
                         out[(tid, "looking_down")] = pitch[1]
 
             # ---- event 5: head turned left/right (vs calibrated yaw)
