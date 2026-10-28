@@ -6,6 +6,8 @@
 #   bash scripts/check_and_run.sh --mode improved       # any extra live.py options are passed on
 #   VIDEO=data/videos/other.mp4 bash scripts/check_and_run.sh
 #   NOTEST=1 bash scripts/check_and_run.sh              # skip the tests
+#   NETWORKS=1 bash scripts/check_and_run.sh            # run YOLO/CLIP live instead of the saved detections
+# By default the replay uses data/detections/<video>_world.jsonl when it exists (smooth, real time).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

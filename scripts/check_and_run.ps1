@@ -5,7 +5,10 @@
 #   .\scripts\check_and_run.ps1 --mode improved          # any extra live.py options are passed on
 #   .\scripts\check_and_run.ps1 -NoTest                  # skip the tests
 #   .\scripts\check_and_run.ps1 -Video data/videos/other.mp4
-param([string]$Video = "data/videos/Test_1.mp4", [switch]$NoTest,
+#   .\scripts\check_and_run.ps1 -Networks                # run YOLO/CLIP live instead of the saved detections
+# By default the replay uses data/detections/<video>_world.jsonl when it exists: smooth, real time, and
+# every change to signals / temporal / context logic is visible. Use -Networks after changing detect.py.
+param([string]$Video = "data/videos/Test_1.mp4", [switch]$NoTest, [switch]$Networks,
       [Parameter(ValueFromRemainingArguments = $true)] [string[]]$LiveArgs)
 
 Set-Location (Join-Path $PSScriptRoot "..")
@@ -28,5 +31,11 @@ if (-not $running) {
 }
 
 Write-Host "== live replay of $Video  (space pause, j/l -/+10 s, +/- speed, k pose, q quit)"
-& $py scripts/live.py --mode context --video $Video --start-point T1 `
-    --object-detector world --imgsz 640 --det-imgsz 1280 --det-skip 2 --stride 2 @LiveArgs
+$cache = "data/detections/" + [IO.Path]::GetFileNameWithoutExtension($Video) + "_world.jsonl"
+if ((Test-Path $cache) -and -not $Networks) {
+    Write-Host "   (saved detections: $cache)"
+    & $py scripts/live.py --mode context --video $Video --start-point T1 --detections $cache @LiveArgs
+} else {
+    & $py scripts/live.py --mode context --video $Video --start-point T1 `
+        --object-detector world --imgsz 640 --det-imgsz 1280 --det-skip 2 --stride 2 @LiveArgs
+}
