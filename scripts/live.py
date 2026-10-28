@@ -12,7 +12,11 @@ Robot route (configs/exam_context.json -> observation_points). The operator play
 If the participant cannot be seen clearly for insufficient_view_s, the system logs an
 "insufficient view" observation and asks for the next permitted point - it never alerts on it.
 
-Keys: n/p route, k pose on/off, q quit. Every confirmed event is logged to results/alerts.db
+Keys: n/p route, k pose on/off, q quit.
+Video replay (--video) also: space pause/resume, j / l back / forward 10 s, , / . back / forward 2 s,
++ / - faster / slower (analyses every Nth frame; video time is kept). A jump resets the running
+timers, so behaviour seen again after a rewind is merged into its existing event, not duplicated.
+Every confirmed event is logged to results/alerts.db
 with timestamp, observation point, image region, a still, and (temporal modes) an evidence clip.
 View and review them with:  python scripts/dashboard.py
 """
@@ -89,13 +93,15 @@ def main():
     ap.add_argument("--record", action="store_true")
     ap.add_argument("--imgsz", type=int, default=416)
     ap.add_argument("--det-skip", type=int, default=2)
+    ap.add_argument("--det-imgsz", type=int, default=0, help="object detector input size (0 = --imgsz)")
+    ap.add_argument("--stride", type=int, default=1, help="--video only: process every Nth frame (video time kept)")
     ap.add_argument("--video", default=None, help="replay a video file as if it were the live camera")
     ap.add_argument("--headless", action="store_true", help="no window (tests / batch replay)")
     ap.add_argument("--width", type=int, default=1280)
     ap.add_argument("--height", type=int, default=720)
     args = ap.parse_args()
 
-    cfg = Config(imgsz=args.imgsz, det_frame_skip=args.det_skip,
+    cfg = Config(imgsz=args.imgsz, det_imgsz=args.det_imgsz, det_frame_skip=args.det_skip,
                  det_model=str(ROOT / "models/yolov8n.pt"), pose_model=str(ROOT / "models/yolov8n-pose.pt"))
     ctx = ExamContext.load(args.context)
     # robot route = points marked on_route; a fixed viewpoint (e.g. a recorded room with seat
@@ -164,8 +170,62 @@ def main():
         print(f"[{t:7.1f}s] moved to point {route[pi].id} ({route[pi].name})")
 
     n_frame = 0
+    stride, paused, last_img = max(1, args.stride), False, None
+    n_total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) if args.video else 0
+
+    def seek(seconds):
+        """Video replay: jump in time. Running episodes end and per-person motion history is
+        cleared, because the timers cannot run backwards; events already logged stay."""
+        nonlocal n_frame, pol, recent, last_img
+        t_now = n_frame / vfps
+        target = int(min(max(n_frame + seconds * vfps, 0), max(n_total - 1, 0)))
+        if temporal:
+            end_episodes(pol.flush(), t_now)
+            clips.stop_all(t_now)
+            clips.buffer.clear()
+            clips._last_t = None
+        pol = make_policy(args.mode, cfg)
+        sig.prev_shoulder.clear()
+        recent = [(target / vfps + 2, f"jumped to {target / vfps:.0f}s")]
+        cap.set(cv2.CAP_PROP_POS_FRAMES, target)
+        n_frame = target
+        last_img = None                         # paused: show the frame at the new position once
+
+    def handle_key(key, t):
+        """-> True to quit."""
+        nonlocal show_pose, paused, stride
+        if key == ord("q"):
+            return True
+        if key == ord("k"):
+            show_pose = not show_pose
+        if key in (ord("n"), ord("p")) and len(route) > 1:
+            move_to((pi + (1 if key == ord("n") else -1)) % len(route), t)
+        if args.video:
+            if key == ord(" "):
+                paused = not paused
+            jump = {ord("j"): -10, ord("l"): 10, ord(","): -2, ord("."): 2}.get(key)
+            if jump:
+                seek(jump)
+            if key in (ord("+"), ord("=")):
+                stride = min(stride + 1, 15)
+            if key in (ord("-"), ord("_")):
+                stride = max(stride - 1, 1)
+        return False
+
     try:
         while True:
+            if paused and last_img is not None:
+                view = last_img.copy()
+                cv2.putText(view, "PAUSED - space resume, j/l -/+10 s, ,/. -/+2 s, q quit", (10, 70),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+                cv2.imshow("PROCTA live", view)
+                if handle_key(cv2.waitKey(50) & 0xFF, n_frame / vfps):
+                    break
+                continue
+            if args.video and stride > 1 and n_frame:
+                for _ in range(stride - 1):     # skipped frames: decode only, video time advances
+                    if cap.grab():
+                        n_frame += 1
             ok, frame = cap.read()
             if not ok:
                 break
@@ -255,20 +315,19 @@ def main():
                 cv2.putText(img, "no person detected - sit further back / more light", (10, img.shape[0] - 35),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
             supp = sum(sig.suppressed.values())
+            vid = (f"  {int(t) // 60}:{int(t) % 60:02d}/{int(n_total / vfps) // 60}:{int(n_total / vfps) % 60:02d}"
+                   f"  speed x{stride}  [space pause  j/l -/+10s  +/- speed]") if args.video else ""
             cv2.putText(img, f"FPS {fps:.1f}  t={t:.0f}s  mode={args.mode}  point {point.id}"
-                             f"{f'  context-suppressed {supp}' if args.mode == 'context' else ''}",
+                             f"{f'  context-suppressed {supp}' if args.mode == 'context' else ''}{vid}",
                         (10, img.shape[0] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+            last_img = img
             if args.headless:
                 key = 255
             else:
                 cv2.imshow("PROCTA live", img)
                 key = cv2.waitKey(1) & 0xFF
-            if key == ord("q"):
+            if handle_key(key, t):
                 break
-            if key == ord("k"):
-                show_pose = not show_pose
-            if key in (ord("n"), ord("p")) and len(route) > 1:
-                move_to((pi + (1 if key == ord("n") else -1)) % len(route), t)
     finally:
         t_end = n_frame / vfps if args.video else time.time() - start
         if temporal:

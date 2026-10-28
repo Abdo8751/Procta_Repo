@@ -21,7 +21,7 @@ from urllib.parse import parse_qs, urlparse
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from procta.alert_log import connect, delete_alert, delete_session, import_live_dirs  # noqa: E402
+from procta.alert_log import connect, delete_alert, delete_session, import_live_dirs, purge_evidence  # noqa: E402
 
 RESULTS = ROOT / "results"
 DB = RESULTS / "alerts.db"
@@ -107,6 +107,8 @@ class Handler(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
         if path in ("/api/delete", "/api/delete_session"):
             con = connect(DB)
+            if path == "/api/delete":
+                purge_evidence(con, body["id"], RESULTS)
             n = delete_alert(con, body["id"]) if path == "/api/delete" else delete_session(con, body["session"])
             con.close()
             return self._send(json.dumps({"ok": True, "deleted": n}))
@@ -120,8 +122,9 @@ class Handler(BaseHTTPRequestHandler):
             con.execute("UPDATE alerts SET review=?, reviewed_at=? WHERE id=?",
                         (decision, datetime.now().isoformat(timespec="seconds") if decision else None,
                          int(body["id"])))
+        purged = purge_evidence(con, body["id"], RESULTS) if decision == "dismissed" else 0
         con.close()
-        return self._send(json.dumps({"ok": True}))
+        return self._send(json.dumps({"ok": True, "files_deleted": purged}))
 
     def log_message(self, *args):          # keep the terminal quiet
         pass
@@ -167,9 +170,11 @@ th.human,td.human{border-left:2px solid var(--accent)} a.clip{margin-right:6px;f
  <label>Alert <select id="type"><option value="">All types</option></select></label>
  <a class="btn" id="csv" href="/api/export.csv">Download CSV</a>
  <button class="del" id="delsess" style="display:none" onclick="delSession()">Delete session</button>
+ <label><input type="checkbox" id="showdis"> Show dismissed (<span id="ndis">0</span>)</label>
  <span class="live"><span class="dot" id="dot"></span><span id="livetxt">idle</span></span>
  <div class="note">Alerts are prompts for human review only &mdash; the system never decides that a student cheated.
- Confidence = detector confidence &times; how consistently the behaviour was seen. Accuracy = confirmed &divide; reviewed.</div>
+ Confidence = detector confidence &times; how consistently the behaviour was seen. Accuracy = confirmed &divide; reviewed.
+ Dismissing an alert deletes its still and clips from this PC and hides it; the decision is kept so accuracy stays correct.</div>
 </header>
 <main>
  <div class="cards">
@@ -184,7 +189,7 @@ th.human,td.human{border-left:2px solid var(--accent)} a.clip{margin-right:6px;f
  <h2>Alerts (newest first)</h2>
  <div class="wrap"><table><thead>
   <tr><th colspan="11" class="grp">Automatic detection (what the system observed)</th><th class="grp human">Invigilator decision</th><th class="grp"></th></tr>
-  <tr><th>Time</th><th>Session time</th><th>Point</th><th>Event</th><th>Track</th><th>Confidence</th>
+  <tr><th>Time</th><th>Session time</th><th>Point</th><th>Event</th><th>Seat / track</th><th>Confidence</th>
   <th>Consistency</th><th>Lasted before alert</th><th>Sightings</th><th>Mode</th><th>Evidence</th><th class="human">Review</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>
  <h2>Robot observation log</h2>
  <div class="wrap"><table><thead><tr><th>Time</th><th>Session time</th><th>Point</th><th>What happened</th><th>Note</th></tr></thead><tbody id="obs"></tbody></table></div>
@@ -226,14 +231,16 @@ function render(){
  $('types').innerHTML=Object.entries(by).map(([n,t])=>`<tr><td>${esc(n)}</td><td>${t.n}</td><td>${t.cn?num(t.c/t.cn):'–'}</td><td>${t.ok}</td><td>${t.no}</td><td>${t.n-t.ok-t.no}</td><td>${t.ok+t.no?pct(t.ok/(t.ok+t.no)):'–'}</td></tr>`).join('')
   ||'<tr><td colspan="7" class="empty">No alerts yet</td></tr>';
  const ids=new Set(alerts.map(a=>a.id));
- $('rows').innerHTML=list.map(a=>{const lvl=a.confidence_level, isNew=seen&&!seen.has(a.id);
+ const ndis=list.filter(a=>a.review==='dismissed').length; $('ndis').textContent=ndis;
+ const shown=$('showdis').checked?list:list.filter(a=>a.review!=='dismissed');
+ $('rows').innerHTML=shown.map(a=>{const lvl=a.confidence_level, isNew=seen&&!seen.has(a.id);
   const clips=JSON.parse(a.clips||'[]');
   return `<tr class="${isNew?'new':''}"><td>${esc(a.timestamp.replace('T',' '))}</td><td>${num(a.t_session_s,1)} s</td>
   <td>${esc(a.observation_point||'–')}</td>
   <td title="${esc(a.message)}${a.context_note?'\nContext: '+esc(a.context_note):''}"><b>${esc(a.alert_name)}</b></td><td>${a.track_id}</td>
   <td><span class="bar"><i class="${lvl}" style="width:${(a.confidence??0)*100}%"></i></span><span class="${lvl}">${num(a.confidence)} ${lvl}</span></td>
   <td>${pct(a.positive_ratio)}</td><td>${num(a.duration_s,1)} s</td><td>${a.sightings??1}${(a.sightings??1)>1?' (consolidated)':''}</td><td>${esc(a.mode)}</td>
-  <td>${a.evidence?`<img class="thumb" loading="lazy" src="/evidence/${encodeURI(a.evidence)}" onclick="zoom(this.src)" alt="evidence">`:'<span class="muted">none</span>'}
+  <td>${a.evidence?`<img class="thumb" loading="lazy" src="/evidence/${encodeURI(a.evidence)}" onclick="zoom(this.src)" alt="evidence">`:`<span class="muted">${a.review==='dismissed'?'deleted':'none'}</span>`}
    ${clips.map((c,i)=>`<a class="clip" href="#" onclick="zoom('/evidence/${encodeURI(c)}');return false">clip ${i+1}</a>`).join('')}</td>
   <td class="human">${a.review?`<span class="tag ${a.review}">${a.review}</span> <button onclick="review(${a.id},null)">undo</button>`
    :`<button class="ok" onclick="review(${a.id},'confirmed')">Confirm</button> <button class="no" onclick="review(${a.id},'dismissed')">Dismiss</button>`}</td>
@@ -257,7 +264,7 @@ function delSession(){const s=$('session').value, n=alerts.length;
 
 This cannot be undone.`)){$('session').value=''; post('/api/delete_session',{session:s});}}
 function zoom(src){$('big').src=src+(src.endsWith('.webp')||src.endsWith('.gif')?'?'+Date.now():''); $('modal').style.display='flex';}
-$('session').onchange=()=>{sig='';seen=null;load()}; $('type').onchange=render;
+$('session').onchange=()=>{sig='';seen=null;load()}; $('type').onchange=render; $('showdis').onchange=render;
 load(); setInterval(load,2000);
 </script></body></html>"""
 

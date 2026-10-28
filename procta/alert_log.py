@@ -69,6 +69,29 @@ def delete_alert(con, alert_id):
         return con.execute("DELETE FROM alerts WHERE id=?", (int(alert_id),)).rowcount
 
 
+def purge_evidence(con, alert_id, results_dir):
+    """Delete an alert's still image and evidence clips from disk (data minimisation for alerts the
+    invigilator dismissed). The row and its decision stay, so accuracy = confirmed / reviewed is
+    still correct. Only files inside results_dir are touched. Returns the number of files deleted."""
+    root = Path(results_dir).resolve()
+    row = con.execute("SELECT evidence, clips FROM alerts WHERE id=?", (int(alert_id),)).fetchone()
+    if row is None:
+        return 0
+    paths = [row["evidence"]] if row["evidence"] else []
+    for c in json.loads(row["clips"] or "[]"):
+        stem = Path(c).with_suffix("")
+        paths += [f"{stem}{ext}" for ext in (".webp", ".mp4", ".gif")]   # a clip is written in 2 formats
+    n = 0
+    for p in paths:
+        f = (root / p).resolve()
+        if root in f.parents and f.is_file():
+            f.unlink()
+            n += 1
+    with con:
+        con.execute("UPDATE alerts SET evidence='', clips='[]' WHERE id=?", (int(alert_id),))
+    return n
+
+
 def delete_session(con, session):
     """Remove a session's alerts and robot observations from the log. The session row is kept,
     marked deleted, so the dashboard does not re-import it from results/live_*/alerts.csv."""

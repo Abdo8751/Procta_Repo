@@ -33,3 +33,14 @@ buttons) and the webcam/pose-skeleton update (git history: a976cbb, acd7f8f, 1a4
 
 Measurements made by the AI on the author's laptop (CPU only): see the Phase 1 summary in the
 commit message / chat (0.23 s per processed frame at pose 960, detector 1280, stride 2).
+
+## 2026-10-28 - Replay controls and dismiss = delete evidence (author's requests)
+
+| File | What the AI did |
+|---|---|
+| `scripts/live.py` | Video replay: `--stride`, `--det-imgsz`; keys space (pause), j/l (-/+10 s), ,/. (-/+2 s), +/- (speed = analyse every Nth frame). A jump ends running episodes, clears motion history and clip buffers, so re-watched behaviour merges into its existing event. |
+| `procta/alert_log.py` | `purge_evidence()`: deletes an alert's still + clips (both formats) inside `results/` only and blanks the paths; the row and the decision stay. |
+| `scripts/dashboard.py` | Dismiss and Delete purge the evidence files; dismissed rows are hidden (checkbox "Show dismissed"); "Seat / track" column. Design: dismissed decisions are kept (not deleted) so accuracy = confirmed / reviewed is not inflated to 100 %. |
+| `tests/test_core.py` | Test: dismiss purges files, keeps the decision, never touches files outside `results/`. |
+
+`configs/exam_context.json`: seat zones redrawn by the author with `define_seats.py` (not AI).

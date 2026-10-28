@@ -168,3 +168,25 @@ def test_delete_alert_and_session(tmp_path):
     assert delete_session(con, "s2") == 2
     assert [r[0] for r in con.execute("SELECT session FROM alerts")] == ["s1"]
     assert con.execute("SELECT deleted FROM sessions WHERE session='s2'").fetchone()[0] == 1
+
+
+def test_dismiss_purges_evidence_but_keeps_decision(tmp_path):
+    import json
+    from datetime import datetime
+    from procta.alert_log import AlertLog, connect, purge_evidence
+    from procta.temporal import Alert
+    ev = tmp_path / "s" / "evidence"
+    ev.mkdir(parents=True)
+    for f in ("still.jpg", "ev001_s1_x.webp", "ev001_s1_x.mp4"):
+        (ev / f).write_bytes(b"x")
+    outside = tmp_path.parent / "keep_me.jpg"
+    outside.write_bytes(b"x")
+    log = AlertLog(tmp_path / "a.db", "s", "context", datetime(2026, 10, 28, 12, 0, 0))
+    rid = log.add(Alert("F1", "phone_in_hand", 5.0, 2.0, 0.4, 1.0), "s/evidence/still.jpg", clip="s/evidence/ev001_s1_x.webp")
+    log.close()
+    con = connect(tmp_path / "a.db")
+    con.execute("UPDATE alerts SET review='dismissed' WHERE id=?", (rid,))
+    assert purge_evidence(con, rid, tmp_path) == 3
+    assert not any(ev.iterdir()) and outside.exists()
+    r = con.execute("SELECT review, evidence, clips, seat FROM alerts WHERE id=?", (rid,)).fetchone()
+    assert (r["review"], r["evidence"], json.loads(r["clips"]), r["seat"]) == ("dismissed", "", [], "F1")
