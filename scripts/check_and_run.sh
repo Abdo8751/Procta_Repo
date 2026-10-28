@@ -29,5 +29,11 @@ else
 fi
 
 echo "== live replay of $VIDEO  (space pause, j/l -/+10 s, +/- speed, k pose, q quit)"
-"$PY" scripts/live.py --mode context --video "$VIDEO" --start-point T1 \
-  --object-detector world --imgsz 640 --det-imgsz 1280 --det-skip 2 --stride 2 "$@"
+CACHE="data/detections/$(basename "${VIDEO%.*}")_world.jsonl"
+if [ -f "$CACHE" ] && [ -z "${NETWORKS:-}" ]; then
+  echo "   (saved detections: $CACHE)"
+  "$PY" scripts/live.py --mode context --video "$VIDEO" --start-point T1 --detections "$CACHE" "$@"
+else
+  "$PY" scripts/live.py --mode context --video "$VIDEO" --start-point T1 \
+    --object-detector world --imgsz 640 --det-imgsz 1280 --det-skip 2 --stride 2 "$@"
+fi
