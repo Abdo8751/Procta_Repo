@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PROCTA Week 6 Progress</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,600;8..60,700&display=swap" rel="stylesheet">
+<style>
+:root {
+  /* layout: single reading column, wide tables scroll inside their own box */
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --ink: #1b2230;
+  --muted: #5b6577;
+  --line: #dde2ea;
+  --accent: #23548f;
+  --good: #1f7a46;
+  --warn: #9a5b00;
+  --bad: #b3261e;
+  --display: "Source Serif 4", Georgia, serif;
+  --body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12161d; --surface: #1a2029; --ink: #e5e9f0; --muted: #9aa5b6; --line: #2d3542;
+    --accent: #84b3ec; --good: #5cc98a; --warn: #e8a94a; --bad: #f08a80; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12161d; --surface: #1a2029; --ink: #e5e9f0; --muted: #9aa5b6; --line: #2d3542;
+  --accent: #84b3ec; --good: #5cc98a; --warn: #e8a94a; --bad: #f08a80; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.6 var(--body); }
+main { max-width: 860px; margin: 0 auto; padding: 32px 16px 64px; display: grid; gap: 28px; }
+header { display: grid; gap: 6px; }
+.eyebrow { color: var(--muted); font-size: 13px; letter-spacing: .04em; text-transform: uppercase; }
+h1 { font: 700 34px/1.15 var(--display); margin: 0; text-wrap: balance; }
+h2 { font: 600 23px/1.25 var(--display); margin: 0 0 10px; text-wrap: balance; }
+h3 { font: 600 16px/1.4 var(--body); margin: 18px 0 6px; }
+p, li { max-width: 68ch; }
+p { margin: 0 0 10px; }
+ul { margin: 0 0 10px; padding-left: 20px; }
+li { margin: 3px 0; }
+section { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 22px 22px 16px; }
+.rq { border-left: 3px solid var(--accent); padding: 4px 0 4px 14px; font-style: italic; }
+code { font: 14px var(--mono); }
+.table-wrap { overflow-x: auto; margin: 8px 0 12px; }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; font-size: 14.5px; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: 13px; }
+td.n { text-align: right; white-space: nowrap; }
+.bars { display: grid; gap: 8px; margin: 10px 0 6px; }
+.bar-row { display: grid; grid-template-columns: 150px 1fr 70px; gap: 10px; align-items: center; font-size: 14px; }
+.bar-track { background: var(--line); border-radius: 4px; height: 14px; overflow: hidden; }
+.bar-fill { height: 100%; background: var(--accent); border-radius: 4px; }
+.bar-row .v { text-align: right; font-variant-numeric: tabular-nums; }
+.pill { display: inline-block; padding: 1px 9px; border-radius: 999px; font-size: 12.5px; font-weight: 600; border: 1px solid currentColor; white-space: nowrap; }
+.ok { color: var(--good); } .no { color: var(--bad); } .maybe { color: var(--warn); }
+.todo { border-color: var(--warn); }
+.todo h2 { color: var(--warn); }
+.small { color: var(--muted); font-size: 14px; }
+footer { color: var(--muted); font-size: 13.5px; }
+@media (max-width: 520px) { .bar-row { grid-template-columns: 96px 1fr 52px; } h1 { font-size: 28px; } section { padding: 18px 14px 12px; } }
+</style>
+</head>
+<body>
+<main>
+
+<header>
+  <span class="eyebrow">PROCTA &middot; bachelor thesis &middot; supervisor meeting, 29 Oct 2026</span>
+  <h1>Week 6: from one webcam to a six-person exam room</h1>
+  <p class="small">First group recording (Test_1), seat-based identity, phone-vs-calculator detection, two new events, and a first comparison of all four methods on the whole video.</p>
+</header>
+
+<section>
+  <h2>Research question</h2>
+  <p class="rq">Can temporal and contextual analysis improve the reliable detection of predefined exam-room events compared with simple frame-level detection?</p>
+  <p>Methods compared on identical detections: <b>B0 frame-level</b> (<code>frame</code>), <b>B1 3-second rule</b> (<code>baseline</code>), <b>temporal confirmation + consolidation</b> (<code>improved</code>) and <b>+ examination context</b> (<code>context</code>). Alerts are prompts for a human invigilator; the system never decides that a student cheated.</p>
+</section>
+
+<section>
+  <h2>What changed this week</h2>
+  <div class="table-wrap"><table>
+    <tr><th>Area</th><th>Change</th><th>Why</th></tr>
+    <tr><td>Identity</td><td>Each person is identified by <b>seat</b> (F1&ndash;F3 front, B1&ndash;B3 back) from seat zones drawn once per camera view; standing or walking people are the invigilator.</td><td>With six people the pose tracker switches ids; a seat is stable, so timers, calibration and event merging no longer reset or split.</td></tr>
+    <tr><td>Phone vs calculator</td><td><b>YOLO-World</b> proposes phone / calculator / paper / book; every phone or calculator box is checked by <b>CLIP</b> on a crop.</td><td>COCO has no calculator class. YOLO-World alone still called calculators &ldquo;cell phone&rdquo; (0.61&ndash;0.66), so recognition is a separate second step.</td></tr>
+    <tr><td>New event</td><td><code>looking_down</code>: hands below the desk while the head stays at writing level, &ge; 3 s.</td><td>Head-down alone is the normal writing posture; Test_1 showed the head does not drop further when looking at a phone under the table, but the hands do.</td></tr>
+    <tr><td>New event</td><td><code>material_exchange</code>: wrists of two different seats meet between them, &ge; 1 s; with the invigilator it is logged as authorised.</td><td>Hand-overs last 1&ndash;2 s; the 3-second rule would miss them.</td></tr>
+    <tr><td>Evaluation</td><td>Ground truth gets a seat column; an alert counts only if <b>type and seat</b> match. Labelling tool with seat selection; label draft from a protocol.</td><td>Six people: a correct event type on the wrong student is a false alert.</td></tr>
+    <tr><td>Demo &amp; review</td><td>Replay from saved detections (real time, pause / rewind / speed), object detection in a background thread live, dashboard with seats, Dismiss deletes the evidence.</td><td>Smooth demo; data minimisation for alerts the invigilator rejects.</td></tr>
+  </table></div>
+  <p class="small">Covered by 35 unit tests (all passing). Every AI-written change is listed per file in <code>docs/ai_use_log.md</code>.</p>
+</section>
+
+<section>
+  <h2>Test_1: the recording</h2>
+  <ul>
+    <li>Phone camera at the front of a university room, 4 min 31 s, 4K HEVC converted once to 1080p H.264 (no audio).</li>
+    <li>Six participants: three in the front row, three behind; calculators and pencil cases on every desk, real phones used by some participants.</li>
+    <li>Processed on a laptop CPU (no GPU): every 2nd frame (15 per second of video), pose model at 960 px, object detector at 1280 px.</li>
+  </ul>
+  <div class="table-wrap"><table>
+    <tr><th>Setting (CPU only)</th><th class="n">s / analysed frame</th><th class="n">whole video</th></tr>
+    <tr><td>YOLOv8n phone + pose (original detector)</td><td class="n">0.23</td><td class="n">~15 min</td></tr>
+    <tr><td>YOLO-World + CLIP + pose (new detector)</td><td class="n">0.33</td><td class="n">~22 min</td></tr>
+    <tr><td>Replay of saved detections (demo)</td><td class="n">&ndash;</td><td class="n">real time</td></tr>
+  </table></div>
+</section>
+
+<section>
+  <h2>Result 1: temporal confirmation cuts the review load 35-fold</h2>
+  <p>Alerts an invigilator would have to open for the whole 4.5-minute video, six students, new detector:</p>
+  <div class="bars" role="img" aria-label="Alerts per method: frame 908, baseline 63, improved 26, context 26">
+    <div class="bar-row"><span>B0 frame-level</span><div class="bar-track"><div class="bar-fill" style="width:100%"></div></div><span class="v">908</span></div>
+    <div class="bar-row"><span>B1 3-second rule</span><div class="bar-track"><div class="bar-fill" style="width:6.94%"></div></div><span class="v">63</span></div>
+    <div class="bar-row"><span>Improved</span><div class="bar-track"><div class="bar-fill" style="width:2.86%"></div></div><span class="v">26</span></div>
+    <div class="bar-row"><span>Context</span><div class="bar-track"><div class="bar-fill" style="width:2.86%"></div></div><span class="v">26</span></div>
+  </div>
+  <div class="table-wrap"><table>
+    <tr><th>Method</th><th class="n">alerts</th><th class="n">per min</th><th class="n">phone in hand</th><th class="n">phone on desk</th><th class="n">head turned</th><th class="n">looking down</th><th class="n">exchange</th><th class="n">body / seat movement</th></tr>
+    <tr><td>B0 frame</td><td class="n">908</td><td class="n">201</td><td class="n">32</td><td class="n">153</td><td class="n">352</td><td class="n">42</td><td class="n">45</td><td class="n">284</td></tr>
+    <tr><td>B1 3-s rule</td><td class="n">63</td><td class="n">13.9</td><td class="n">2</td><td class="n">10</td><td class="n">42</td><td class="n">4</td><td class="n">4</td><td class="n">1</td></tr>
+    <tr><td>Improved</td><td class="n">26</td><td class="n">5.8</td><td class="n">1</td><td class="n">0</td><td class="n">14</td><td class="n">6</td><td class="n">4</td><td class="n">1</td></tr>
+    <tr><td>Context</td><td class="n">26</td><td class="n">5.8</td><td class="n">1</td><td class="n">0</td><td class="n">14</td><td class="n">6</td><td class="n">4</td><td class="n">1</td></tr>
+  </table></div>
+  <p><b>Fewer alerts is not yet &ldquo;better&rdquo;:</b> without ground truth these are review-load numbers, not precision or recall. Labelling Test_1 is the next step (tool ready).</p>
+  <p><b>The original B1 rule has a multi-person bug that the single-webcam tests hid:</b> one phone produces a &ldquo;phone on desk&rdquo; alert for <b>all six students at the same second</b> (e.g. 21.5 s and 27.3 s with the original detector). The improved method assigns each phone to one owner.</p>
+  <p><b>Context = improved on Test_1</b>, because this viewpoint has no allowed-look directions configured and calculators are already no longer phones. Context&rsquo;s effect here is only what it logs instead of alerting (calculators as permitted devices). Showing its value needs a recording with a clock / invigilator side.</p>
+</section>
+
+<section>
+  <h2>Result 2: phone vs calculator</h2>
+  <div class="table-wrap"><table>
+    <tr><th>Phone events, whole video</th><th class="n">B0 frame</th><th class="n">B1 3-s</th><th class="n">improved / context</th><th>checked by eye</th></tr>
+    <tr><td>Original detector (YOLOv8n &ldquo;cell phone&rdquo;)</td><td class="n">952</td><td class="n">56</td><td class="n">4</td><td><span class="pill no">3 false</span> pencil case &times;2, calculator; <span class="pill maybe">1 possibly real</span></td></tr>
+    <tr><td>YOLO-World + CLIP</td><td class="n">185</td><td class="n">12</td><td class="n">1</td><td><span class="pill ok">1 correct</span> B2 holding a phone (0:40)</td></tr>
+  </table></div>
+  <p>On crops, CLIP recognised calculators at 0.96&ndash;1.00 and the two real phones at 0.69&ndash;0.86; the back-row phone seen from behind in a dark case was the hardest case (0.69).</p>
+</section>
+
+<section>
+  <h2>Cases checked by eye</h2>
+  <div class="table-wrap"><table>
+    <tr><th>Time</th><th>Seat</th><th>Event</th><th>Outcome</th><th>Likely cause / note</th></tr>
+    <tr><td>0:40</td><td>B2</td><td>phone in hand</td><td><span class="pill ok">correct</span></td><td>Back-row phone, detector confidence 0.91; one alert with clip.</td></tr>
+    <tr><td>0:03</td><td>F1</td><td>head turned to F2</td><td><span class="pill ok">correct after fix</span></td><td>Missed at first: the room camera sees faces ~3&times; smaller than the webcam, so yaw changed by only 0.15&ndash;0.2 (threshold 0.25). Now a per-viewpoint threshold (0.12).</td></tr>
+    <tr><td>0:30</td><td>F2</td><td>looking down at phone under the table</td><td><span class="pill ok">correct after fix</span></td><td>Missed at first: required the head lower than when writing. Hands drop instead; rule changed.</td></tr>
+    <tr><td>1:16</td><td>F2</td><td>phone held ~2 s</td><td><span class="pill maybe">not alerted by design</span></td><td>Shorter than the 3-second rule. Discussion point below.</td></tr>
+    <tr><td>2:57</td><td>B1+B3</td><td>material exchange</td><td><span class="pill ok">plausible</span></td><td>Hands meet between desks with a sheet of paper.</td></tr>
+    <tr><td>0:04, 2:31, 3:51</td><td>pairs</td><td>material exchange</td><td><span class="pill no">likely false</span></td><td>Front-row and back-row people overlap in the image; 2-D wrist positions cannot tell who is in front.</td></tr>
+  </table></div>
+</section>
+
+<section>
+  <h2>Limitations to state honestly</h2>
+  <ul>
+    <li><b>No ground truth yet</b> for Test_1: all numbers above are alert counts and eye checks, not precision / recall.</li>
+    <li><b>Thresholds were adjusted on the same video</b> they are shown on (head yaw 0.12, looking-down rule). They must be frozen and tested on a second recording.</li>
+    <li><b>Material exchange</b> produces false alerts where rows overlap in the image (one camera, no depth).</li>
+    <li><b>CPU only:</b> the new detector cannot run at full frame rate live; the demo replays saved detections, the live webcam runs object detection in the background (boxes update about twice a second).</li>
+    <li>One session, six participants, one camera position, one lighting condition.</li>
+  </ul>
+</section>
+
+<section>
+  <h2>Questions for the supervisor</h2>
+  <ol>
+    <li><b>Short phone use:</b> should <code>phone_in_hand</code> keep the 3-second rule (F2&rsquo;s 2-second look is not alerted), or use 1 second like exchanges, since any phone use may matter?</li>
+    <li><b>Material exchange:</b> accept the event with its row-overlap false alerts and report them, require a detected sheet of paper, or limit it to neighbours in the same row?</li>
+    <li><b>Evaluation design:</b> label Test_1 as the development set and record a second group session (protocol v3) as the held-out test set with frozen thresholds &mdash; agreed?</li>
+    <li><b>Context:</b> for the next recording, which allowed look directions (clock, invigilator) should the room have, so the context method can be evaluated?</li>
+  </ol>
+</section>
+
+<section>
+  <h2>Next steps</h2>
+  <ol>
+    <li>Label Test_1 with seats (<code>scripts/label_video.py --point T1</code>); run <code>summarize_session.py --gt</code> for precision, recall, false alerts per hour and detection delay per event and seat.</li>
+    <li>Write <code>docs/protocol_v3_group.csv</code> (timed actions per seat, hand-raise sync, lookalikes: calculator, clock look, authorised exchange) and record Test_2.</li>
+    <li>Freeze thresholds on Test_1, evaluate once on Test_2.</li>
+    <li>Report: methods chapter (seats, two-stage object recognition, event definitions), results per method and seat, error analysis with the cases above.</li>
+  </ol>
+</section>
+
+<section class="todo">
+  <h2>Open items to confirm</h2>
+  <ul>
+    <li>Consent / ethics wording for Test_1 (the page does not state it yet).</li>
+    <li>Back-row seat numbering: the drawn zones read B1, B3, B2 from left to right.</li>
+    <li>Whether Test_1 followed a written script; if so, add it as <code>docs/protocol_v3_group.csv</code> for the label draft.</li>
+  </ul>
+</section>
+
+<footer>
+  Code and numbers: repository <code>Abdo8751/Procta_Repo</code>, <code>results/test_1/summary.md</code>. Video and evidence images stay on the author&rsquo;s laptop and are not in the repository. AI assistance (Claude Code) is disclosed per file in <code>docs/ai_use_log.md</code>.
+</footer>
+
+</main>
+</body>
+</html>
