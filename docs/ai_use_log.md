@@ -79,3 +79,4 @@ looking_down or material_exchange signal. Speed: 0.33 s per processed frame (~22
 | `procta/evaluation.py`, `scripts/run_offline.py`, `scripts/evaluate_sessions.py` | Seat-aware matching (type AND seat; pairs order-free; type-only when GT has no seat), per-event persistence for targets, lookalike rows never targets, `evaluate_per_seat`, `alert_rows`. |
 | `scripts/check_and_run.ps1`, `scripts/check_and_run.sh` | Run tests, start the dashboard, replay Test_1 with the current code. |
 | `tests/test_week5.py` | Tests: seat-aware evaluation, draft-label shift, hands in lap with head raised is not looking_down, per-point threshold override. |
+| `scripts/summarize_session.py` | New. All four methods x both object detectors on one session -> `results/<name>/summary.md` (+ json); with `--gt` adds per-event and per-seat metrics. |
